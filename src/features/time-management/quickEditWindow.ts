@@ -1,5 +1,5 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getCurrentWindow, currentMonitor, LogicalPosition } from '@tauri-apps/api/window';
+import { getCurrentWindow, currentMonitor, PhysicalPosition } from '@tauri-apps/api/window';
 import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Task, QuadrantType } from './timeManagementTypes';
 import type { TaskDraft } from './TaskQuickEdit';
@@ -10,7 +10,7 @@ import type { TaskDraft } from './TaskQuickEdit';
 // 应用空闲时预热创建一次，之后打开=定位+init+show，
 // 关闭=hide 复用，免去每次建窗/加载 bundle 的数百毫秒。
 // 事件协议（负载带自增 session 防旧会话串话）：
-//   popup → main: tqe:ready / tqe:save / tqe:create / tqe:closed
+//   popup → main: tqe:ready / tqe:shown / tqe:save / tqe:create / tqe:closed
 //   main → popup: tqe:init / tqe:close-layer / tqe:close-all / tqe:ping
 // ==========================================
 
@@ -49,6 +49,8 @@ let unlistenPoolFocus: UnlistenFn | null = null;
 let listenersInstalled = false;
 let sessionSeq = 0;
 let current: { session: number; opts: QuickEditWindowOptions } | null = null;
+// 本会话目标位置（物理像素）：首次 show 时 Windows 可能因 DPI 校正挪动窗口，收到 tqe:shown 后重申一次
+let lastPos: { x: number; y: number } | null = null;
 
 // ---------- 应用整体失焦检测 ----------
 // 主窗口与子窗口都不在焦点上（切到其他程序）才整体关闭；
@@ -97,6 +99,11 @@ async function installListeners(): Promise<void> {
     }),
     listen<{ session: number }>('tqe:closed', (e) => {
       endSession(e.payload?.session ?? -1);
+    }),
+    // 子窗口首次 show 会触发 DPI 校正（隐藏期间 scale factor 可能过期），可能被系统挪位：显示后重申目标位置
+    listen<{ session: number }>('tqe:shown', (e) => {
+      if (e.payload?.session !== current?.session || !pool || !lastPos) return;
+      void pool.setPosition(new PhysicalPosition(lastPos.x, lastPos.y)).catch(() => {});
     }),
     getCurrentWindow().onFocusChanged(({ payload }) => {
       mainFocused = payload;
@@ -249,7 +256,10 @@ export async function openQuickEditWindow(opts: QuickEditWindowOptions): Promise
 
   current = { session, opts };
   popupEverFocused = false;
-  await pool.setPosition(new LogicalPosition(winX, winY)).catch(() => {});
+  // 用主窗口的缩放系数换算为物理坐标：子窗口隐藏期间的 scale factor 可能仍是默认值，
+  // 走 LogicalPosition 会在首次打开时按错误系数换算导致位置偏移
+  lastPos = { x: Math.round(winX * factor), y: Math.round(winY * factor) };
+  await pool.setPosition(new PhysicalPosition(lastPos.x, lastPos.y)).catch(() => {});
   void emitTo(POOL_LABEL, 'tqe:init', {
     session,
     task: opts.task ?? null,

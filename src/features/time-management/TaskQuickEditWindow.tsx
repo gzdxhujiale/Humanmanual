@@ -47,11 +47,15 @@ export function TaskQuickEditWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 浮层就绪后再显示窗口，避免透明背景生效前闪白
+  // 浮层就绪后再显示窗口，避免透明背景生效前闪白；
+  // 显示完成后回传 tqe:shown，让主窗口重申位置（首次 show 可能被系统 DPI 校正挪位）
   useEffect(() => {
     if (!init) return;
     const win = getCurrentWindow();
-    void win.show().then(() => win.setFocus()).catch(() => {});
+    void win.show()
+      .then(() => win.setFocus())
+      .then(() => emit('tqe:shown', { session: init.session }))
+      .catch(() => {});
   }, [init]);
 
   if (!init) return null;
