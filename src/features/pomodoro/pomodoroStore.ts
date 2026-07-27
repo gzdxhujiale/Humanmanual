@@ -1,10 +1,13 @@
 import { create } from 'zustand';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { PomodoroMode, PomodoroPhase, PomodoroRecord, PomodoroStats, FavoriteFocusTask, LinkedTarget } from './pomodoroTypes';
 import { pomodoroService } from './pomodoroService';
 import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/createSyncEngine';
-import { logError, logSilent, logWarn } from '../../lib/logger';
+import { logError, logSilent } from '../../lib/logger';
+import { requestNotificationPermission, sendDesktopNotification } from '../../lib/notifications';
 import { todayYMD } from '../../lib/dateUtils';
+
+// 通知能力已提取到 lib/notifications，保留 re-export 兼容既有导入
+export { requestNotificationPermission, sendDesktopNotification };
 
 const STORAGE_KEY_RECORDS = 'fishworker_pomodoro_records_v1';
 const STORAGE_KEY_FAVORITES = 'fishworker_pomodoro_favorites_v1';
@@ -119,55 +122,6 @@ interface PomodoroState {
   getActiveFavoriteTasks: () => FavoriteFocusTask[];
   getArchivedFavoriteTasks: () => FavoriteFocusTask[];
 }
-
-export const requestNotificationPermission = async () => {
-  try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const permission = await requestPermission();
-      granted = permission === 'granted';
-    }
-  } catch (e) {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      try {
-        await Notification.requestPermission();
-      } catch (err) {
-        logSilent('pomodoroStore', 'web notification permission request failed', err);
-      }
-    }
-  }
-};
-
-export const sendDesktopNotification = async (title: string, body: string) => {
-  try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const permission = await requestPermission();
-      granted = permission === 'granted';
-    }
-    if (granted) {
-      sendNotification({
-        title,
-        body,
-      });
-      return;
-    }
-  } catch (e) {
-    logWarn('pomodoroStore', 'Tauri notification plugin failed, trying Web Notification fallback', e);
-  }
-
-  // Fallback to Web Notification API
-  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-    try {
-      new Notification(title, {
-        body,
-        tag: 'fishworker-pomodoro-notification',
-      });
-    } catch (e) {
-      logError('pomodoroStore', 'failed to send desktop notification via Web API', e);
-    }
-  }
-};
 
 let globalTimerInterval: NodeJS.Timeout | null = null;
 

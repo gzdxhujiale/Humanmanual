@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  quill: file:./scripts/npm-stubs/quill
+
 patchedDependencies:
   reactjs-tiptap-editor@1.0.29:
     hash: bqf5kjswqsyhzizdhj4qkytr4a
@@ -291,7 +294,7 @@ importers:
         specifier: ^8.5.20
         version: 8.5.21
       quill:
-        specifier: file:./scripts/npm-stubs/quill
+        specifier: file:C:\Users\Admin\Documents\Humanmanual\scripts\npm-stubs\quill
         version: file:scripts/npm-stubs/quill
       sass-embedded:
         specifier: ^1.100.0
@@ -5455,18 +5458,10 @@ packages:
     resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
     dev: false
 
-  /eventemitter3@5.0.4:
-    resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
-    dev: false
-
   /expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
     dev: true
-
-  /fast-diff@1.3.0:
-    resolution: {integrity: sha512-VxPP4NqbUjj6MaAOafWeUn2cXWLcCtljklUtZf0Ind4XQ+QPtmA0b18zZy0jIQx+ExRVCR/ZQpBmik5lXshNsw==}
-    dev: false
 
   /fast-equals@5.4.1:
     resolution: {integrity: sha512-DjlFSM5Pk9cGcL0q5QXl66eGzx0N6szNgaswwc5ZphlBohjTVJSnGgI+rJVOgOi65qUoQnDZN4nDqi33udtydQ==}
@@ -6184,17 +6179,8 @@ packages:
     resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
     dev: false
 
-  /lodash.clonedeep@4.5.0:
-    resolution: {integrity: sha512-H5ZhCF25riFd9uB5UCkVKo61m3S/xZk1x4wA6yp/L3RFP6Z/eHH1ymQcGLo7J3GMPfm0V/7m1tryHuGVxpqEBQ==}
-    dev: false
-
   /lodash.debounce@4.0.8:
     resolution: {integrity: sha512-FT1yDzDYEoYWhnSGnpE/4Kj1fLZkDFyqRb7fNt6FdYOSxlUWAtp42Eh6Wb0rGIv/m9Bgo7x4GhQbm5Ys4SG5ow==}
-    dev: false
-
-  /lodash.isequal@4.5.0:
-    resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
-    deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
     dev: false
 
   /lodash.throttle@4.1.1:
@@ -6703,10 +6689,6 @@ packages:
     resolution: {integrity: sha512-WjR1hOeg+kki3ZIOjaf4b5WVcay1jaliKSYiEaB1XzwhMQZJxRdQRv0V31EKBYlxb4T7SK3hjfc/jxyU64BoSw==}
     dev: false
 
-  /parchment@3.0.0:
-    resolution: {integrity: sha512-HUrJFQ/StvgmXRcQ1ftY6VEZUq3jA2t9ncFN4F84J/vN0/FPpQF+8FKXb3l6fLces6q0uOHj6NJn+2xvZnxO6A==}
-    dev: false
-
   /parse5@8.0.1:
     resolution: {integrity: sha512-z1e/HMG90obSGeidlli3hj7cbocou0/wa5HacvI3ASx34PecNjNQeaHNo5WIZpWofN9kgkqV1q5YvXe3F0FoPw==}
     dependencies:
@@ -6977,25 +6959,6 @@ packages:
 
   /queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
-    dev: false
-
-  /quill-delta@5.1.0:
-    resolution: {integrity: sha512-X74oCeRI4/p0ucjb5Ma8adTXd9Scumz367kkMK5V/IatcX6A0vlgLgKbzXWy5nZmCGeNJm2oQX0d2Eqj+ZIlCA==}
-    engines: {node: '>= 12.0.0'}
-    dependencies:
-      fast-diff: 1.3.0
-      lodash.clonedeep: 4.5.0
-      lodash.isequal: 4.5.0
-    dev: false
-
-  /quill@2.0.3:
-    resolution: {integrity: sha512-xEYQBqfYx/sfb33VJiKnSJp8ehloavImQ2A6564GAbqG55PGw1dAWUn1MUbQB62t0azawUS2CZZhWCjO8gRvTw==}
-    engines: {npm: '>=8.2.3'}
-    dependencies:
-      eventemitter3: 5.0.4
-      lodash-es: 4.18.1
-      parchment: 3.0.0
-      quill-delta: 5.1.0
     dev: false
 
   /randombytes@2.1.0:
@@ -7817,7 +7780,7 @@ packages:
       katex: 0.16.47
       mdast-util-from-markdown: 1.3.1
       pdf-lib: 1.17.1
-      quill: 2.0.3
+      quill: file:scripts/npm-stubs/quill
       tern: 0.24.3
       uuid: 9.0.1
       ws: 7.5.13
@@ -8550,4 +8513,3 @@ packages:
   file:scripts/npm-stubs/quill:
     resolution: {directory: scripts/npm-stubs/quill, type: directory}
     name: quill
-    dev: true

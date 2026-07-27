@@ -32,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Generate Dictionary Database
-        run: pnpm build:dict:placeholder
-
       - name: Build and Publish Tauri App
         uses: tauri-apps/tauri-action@v0
         env:

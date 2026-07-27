@@ -39,6 +39,7 @@ const DDL_STATEMENTS: &[&str] = &[
         completed_at BIGINT NULL,
         description TEXT NULL,
         deadline BIGINT NULL,
+        reminder VARCHAR(100) NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
@@ -243,6 +244,9 @@ pub async fn ensure_tables(pool: &MySqlPool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE habits ADD COLUMN reminder VARCHAR(50) NULL").execute(pool).await;
     let _ = sqlx::query("ALTER TABLE habits ADD COLUMN auto_popup_log TINYINT(1) NOT NULL DEFAULT 0").execute(pool).await;
 
+    // Migration for reminder column in time_management_tasks
+    let _ = sqlx::query("ALTER TABLE time_management_tasks ADD COLUMN reminder VARCHAR(100) NULL").execute(pool).await;
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -278,6 +282,7 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         completed_at INTEGER NULL,
         description TEXT NULL,
         deadline INTEGER NULL,
+        reminder TEXT NULL,
         updated_at TEXT DEFAULT (datetime('now'))
     )",
 
@@ -460,5 +465,9 @@ pub async fn ensure_local_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for sql in SQLITE_DDL_STATEMENTS {
         sqlx::query(*sql).execute(pool).await?;
     }
+
+    // Migration for reminder column in time_management_tasks (no-op if it already exists)
+    let _ = sqlx::query("ALTER TABLE time_management_tasks ADD COLUMN reminder TEXT NULL").execute(pool).await;
+
     Ok(())
 }

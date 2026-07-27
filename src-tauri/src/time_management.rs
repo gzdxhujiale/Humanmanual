@@ -29,6 +29,8 @@ pub struct Task {
     pub completed_at: Option<i64>,
     pub description: Option<String>,
     pub deadline: Option<i64>,
+    #[serde(default)]
+    pub reminder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,7 +59,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
     }
 
     let tasks_rows = sqlx::query(
-        "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline FROM time_management_tasks"
+        "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder FROM time_management_tasks"
     )
     .fetch_all(&*pool)
     .await?;
@@ -76,6 +78,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
             completed_at: row.try_get("completed_at").unwrap_or_default(),
             description: row.try_get("description").unwrap_or_default(),
             deadline: row.try_get("deadline").unwrap_or_default(),
+            reminder: row.try_get("reminder").unwrap_or_default(),
         });
     }
 
@@ -87,8 +90,8 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
 pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let completed_val: i32 = if task.completed { 1 } else { 0 };
     sqlx::query(
-        "INSERT INTO time_management_tasks (id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO time_management_tasks (id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET 
             title = excluded.title, 
             role_id = excluded.role_id, 
@@ -99,7 +102,8 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResul
             created_at = excluded.created_at, 
             completed_at = excluded.completed_at, 
             description = excluded.description, 
-            deadline = excluded.deadline"
+            deadline = excluded.deadline, 
+            reminder = excluded.reminder"
     )
     .bind(&task.id)
     .bind(&task.title)
@@ -112,6 +116,7 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResul
     .bind(task.completed_at)
     .bind(&task.description)
     .bind(task.deadline)
+    .bind(&task.reminder)
     .execute(&*pool)
     .await?;
 

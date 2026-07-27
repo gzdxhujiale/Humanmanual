@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { emit, listen } from '@tauri-apps/api/event';
 import { List, Folder, Note, Template, ListsData, NoteGroup } from './listsTypes';
 import * as listsService from './listsService';
 import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/createSyncEngine';
@@ -12,23 +13,39 @@ function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-let noteSyncChannel: BroadcastChannel | null = null;
-try {
-  if (typeof BroadcastChannel !== 'undefined') {
-    noteSyncChannel = new BroadcastChannel('humanmanual_note_sync');
-  }
-} catch (e) {
-  logSilent('listsStore', 'BroadcastChannel unavailable', e);
+// 跨窗口笔记同步走 Tauri 事件（BroadcastChannel 在 macOS WKWebView 下跨窗口不通）。
+// emit 会广播给包括本窗口在内的所有窗口，用实例 ID 过滤自回声。
+const SYNC_SOURCE_ID = genId('win');
+const NOTE_UPDATED_EVENT = 'lists:note-updated';
+const NOTE_DELETED_EVENT = 'lists:note-deleted';
+const NOTES_REORDERED_EVENT = 'lists:notes-reordered';
+
+interface NoteSyncPayload {
+  source: string;
+  noteId: string;
+  updates?: Partial<Note>;
+}
+
+interface NotesReorderPayload {
+  source: string;
+  /** [noteId, sortOrder] */
+  items: Array<[string, number]>;
 }
 
 function broadcastNoteUpdate(noteId: string, updates: Partial<Note>) {
-  if (noteSyncChannel) {
-    try {
-      noteSyncChannel.postMessage({ type: 'NOTE_UPDATED', noteId, updates });
-    } catch (e) {
-      logSilent('listsStore', 'note sync broadcast failed', e);
-    }
-  }
+  emit(NOTE_UPDATED_EVENT, { source: SYNC_SOURCE_ID, noteId, updates } satisfies NoteSyncPayload)
+    .catch(e => logSilent('listsStore', 'note sync broadcast failed', e));
+}
+
+function broadcastNoteDelete(noteId: string) {
+  emit(NOTE_DELETED_EVENT, { source: SYNC_SOURCE_ID, noteId } satisfies NoteSyncPayload)
+    .catch(e => logSilent('listsStore', 'note sync broadcast failed', e));
+}
+
+function broadcastNotesReorder(items: Array<[string, number]>) {
+  if (items.length === 0) return;
+  emit(NOTES_REORDERED_EVENT, { source: SYNC_SOURCE_ID, items } satisfies NotesReorderPayload)
+    .catch(e => logSilent('listsStore', 'note sync broadcast failed', e));
 }
 
 interface ListsStoreState {
@@ -136,20 +153,47 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
           initialized: true
         });
 
-        if (noteSyncChannel) {
-          noteSyncChannel.onmessage = (event) => {
-            if (event.data?.type === 'NOTE_UPDATED') {
-              const { noteId, updates } = event.data;
-              const data = get().data;
-              const index = data.notes.findIndex(n => n.id === noteId);
-              if (index !== -1) {
-                const newNotes = [...data.notes];
-                newNotes[index] = { ...newNotes[index], ...updates, updatedAt: Date.now() };
-                set({ data: { ...data, notes: newNotes } });
-              }
-            }
-          };
-        }
+        // 跨窗口同步：将其他窗口的更新/删除应用到本窗口副本（不回写 DB，发起方已写）
+        void listen<NoteSyncPayload>(NOTE_UPDATED_EVENT, (event) => {
+          const { source, noteId, updates } = event.payload;
+          if (source === SYNC_SOURCE_ID) return;
+          const data = get().data;
+          const index = data.notes.findIndex(n => n.id === noteId);
+          if (index !== -1) {
+            const newNotes = [...data.notes];
+            newNotes[index] = { ...newNotes[index], ...updates, updatedAt: Date.now() };
+            set({ data: { ...data, notes: newNotes } });
+          }
+        }).catch(e => logSilent('listsStore', 'note sync listen failed', e));
+
+        void listen<NoteSyncPayload>(NOTE_DELETED_EVENT, (event) => {
+          const { source, noteId } = event.payload;
+          if (source === SYNC_SOURCE_ID) return;
+          // 先取消本窗口挂起的防抖保存，防止把已删除的笔记写回数据库“复活”
+          syncEngine.cancel(`note:${noteId}`);
+          const data = get().data;
+          const note = data.notes.find(n => n.id === noteId);
+          if (!note) return;
+          const newLists = [...data.lists];
+          const listIndex = newLists.findIndex(l => l.id === note.listId);
+          if (listIndex !== -1 && (newLists[listIndex].itemCount || 0) > 0) {
+            newLists[listIndex] = { ...newLists[listIndex], itemCount: newLists[listIndex].itemCount! - 1 };
+          }
+          set({ data: { ...data, notes: data.notes.filter(n => n.id !== noteId), lists: newLists } });
+        }).catch(e => logSilent('listsStore', 'note sync listen failed', e));
+
+        void listen<NotesReorderPayload>(NOTES_REORDERED_EVENT, (event) => {
+          const { source, items } = event.payload;
+          if (source === SYNC_SOURCE_ID) return;
+          const orderMap = new Map(items);
+          const data = get().data;
+          set({
+            data: {
+              ...data,
+              notes: data.notes.map(n => (orderMap.has(n.id) ? { ...n, sortOrder: orderMap.get(n.id)! } : n)),
+            },
+          });
+        }).catch(e => logSilent('listsStore', 'note sync listen failed', e));
       } catch (e) {
         logError('listsStore', 'failed to load from SQLite', e);
         set({ initialized: true });
@@ -443,6 +487,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
 
       syncEngine.cancel(`note:${id}`);
       listsService.deleteNote(id).catch(() => {});
+      broadcastNoteDelete(id);
     }
   },
 
@@ -484,6 +529,9 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
 
     set({ data: { ...data, notes: newNotes } });
     const updatedNote = newNotes.find(n => n.id === noteId);
+    // 同步分组变更与受影响的同组排序，防止子窗口旧副本整笔回写撤销移动
+    broadcastNoteUpdate(noteId, { groupId });
+    broadcastNotesReorder(Array.from(orderMap.entries()));
 
     syncEngine.schedule(`note:${noteId}`, () => listsService.moveNote(noteId, note.listId, groupId, updatedNote?.sortOrder || 0), LOW_FREQ_DELAY);
   },
@@ -517,6 +565,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
     });
 
     set({ data: { ...data, notes: newNotes, lists: newLists } });
+    broadcastNoteUpdate(noteId, { listId: targetListId, groupId: targetGroupId, sortOrder: newSortOrder });
 
     syncEngine.schedule(`note:${noteId}`, () => listsService.moveNote(noteId, targetListId, targetGroupId, newSortOrder), LOW_FREQ_DELAY);
   },
@@ -536,6 +585,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
     });
 
     set({ data: { ...data, notes: newNotes } });
+    broadcastNotesReorder(items);
     syncEngine.schedule('reorder:notes', () => listsService.reorderNotes(items), LOW_FREQ_DELAY);
   },
 

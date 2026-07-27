@@ -15,6 +15,7 @@ pub struct Model {
     pub completed_at: Option<i64>,
     pub description: Option<String>,
     pub deadline: Option<i64>,
+    pub reminder: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

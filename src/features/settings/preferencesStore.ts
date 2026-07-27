@@ -34,7 +34,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   init: async () => {
     if (get().initialized) return;
     try {
-      const keysToLoad = ['tm-hide-completed', 'lists-sidebar-collapsed', 'lists-active-list-id', 'lists-note-open-mode'];
+      const keysToLoad = ['tm-hide-completed', 'lists-sidebar-collapsed', 'lists-active-list-id', 'lists-note-open-mode', 'toolbar-tool-order'];
       const loadedPrefs: Record<string, string> = {};
       
       for (const key of keysToLoad) {

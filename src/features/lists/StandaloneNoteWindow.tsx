@@ -26,6 +26,18 @@ export function StandaloneNoteWindow() {
 
   const note = store.data.notes.find(n => n.id === noteId) || null;
 
+  // 笔记被其他窗口删除（删除事件同步过来）：自动关闭本窗口，不停在“不存在”占位页
+  const hadNoteRef = useRef(false);
+  useEffect(() => {
+    if (note) {
+      hadNoteRef.current = true;
+      return;
+    }
+    if (hadNoteRef.current) {
+      getCurrentWindow().close().catch(() => window.close());
+    }
+  }, [note]);
+
   if (!noteId) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888' }}>

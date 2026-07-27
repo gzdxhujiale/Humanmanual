@@ -756,3 +756,463 @@
 .tm-toggle-label input[type="checkbox"] {
   accent-color: var(--accent);
 }
+
+/* ==========================================
+   TaskQuickEdit — 任务快捷编辑浮层（三层）
+   ========================================== */
+
+/* 第一层：任务编辑浮层 */
+.tqe-popover {
+  position: fixed;
+  z-index: 1050;
+  background: var(--surface-2, #fff);
+  border: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop, 0 6px 28px rgba(23, 27, 33, 0.16));
+  animation: tqe-pop-in 120ms ease-out;
+}
+
+@keyframes tqe-pop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.tqe-toprow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+}
+
+.tqe-date-field {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-faint, #8a94a3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 6px;
+  border-radius: 6px;
+  min-width: 0;
+}
+.tqe-date-field:hover { background: var(--surface-3, #f0f3f6); }
+.tqe-date-field.has-value { color: var(--accent, #1f6fd1); }
+.tqe-date-field svg { flex-shrink: 0; }
+.tqe-date-field .txt {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tqe-flag {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: default;
+  padding: 4px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+
+.tqe-body { padding: 12px 14px 16px; }
+
+.tqe-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tqe-title {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong, #171b21);
+  font-family: inherit;
+  background: transparent;
+  min-width: 0;
+}
+.tqe-title::placeholder { color: var(--text-faint, #8a94a3); font-weight: 400; }
+
+.tqe-desc-icon {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint, #8a94a3);
+  padding: 4px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+.tqe-desc-icon:hover { background: var(--surface-3, #f0f3f6); color: var(--text-muted, #697381); }
+
+.tqe-desc-editor {
+  margin-top: 10px;
+  min-height: 148px;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted, #697381);
+}
+
+/* 第二层：日期与提醒 */
+.tqe-date-popover {
+  position: fixed;
+  z-index: 1060;
+  background: var(--surface-2, #fff);
+  border: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop, 0 6px 28px rgba(23, 27, 33, 0.16));
+  padding: 14px;
+  animation: tqe-pop-in 120ms ease-out;
+}
+
+.tqe-tabs {
+  display: flex;
+  background: var(--surface-3, #f0f3f6);
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 12px;
+}
+.tqe-tabs button {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint, #8a94a3);
+  cursor: pointer;
+  font-family: inherit;
+}
+.tqe-tabs button.on {
+  background: var(--surface-2, #fff);
+  color: var(--text-strong, #171b21);
+  box-shadow: 0 1px 3px rgba(23, 27, 33, 0.08);
+}
+.tqe-tabs button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.tqe-quick {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 12px;
+}
+.tqe-quick button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #697381);
+  padding: 7px 10px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+.tqe-quick button:hover { background: var(--surface-3, #f0f3f6); color: var(--text-strong, #171b21); }
+
+.tqe-month {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong, #171b21);
+  padding: 2px 4px 8px;
+}
+.tqe-month .nav { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.tqe-month .nav button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint, #8a94a3);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+.tqe-month .nav button:hover { background: var(--surface-3, #f0f3f6); color: var(--text-strong, #171b21); }
+
+.tqe-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  row-gap: 2px;
+  text-align: center;
+}
+.tqe-grid .wd {
+  font-size: 12px;
+  color: var(--text-faint, #8a94a3);
+  padding: 4px 0 6px;
+}
+.tqe-grid .day {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, #2b3139);
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: inherit;
+}
+.tqe-grid .day:hover { background: var(--surface-3, #f0f3f6); }
+.tqe-grid .day.dim { color: var(--text-faint, #8a94a3); opacity: 0.55; }
+.tqe-grid .day.today { box-shadow: inset 0 0 0 1px var(--line-accent, rgba(31, 111, 209, 0.26)); }
+.tqe-grid .day.sel { background: var(--accent, #1f6fd1); color: #fff; font-weight: 700; }
+.tqe-grid .day.sel:hover { background: var(--accent, #1f6fd1); }
+
+.tqe-rows {
+  border-top: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  margin-top: 10px;
+  padding-top: 4px;
+}
+.tqe-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13.5px;
+  color: var(--text-primary, #2b3139);
+  font-family: inherit;
+  padding: 10px 6px;
+  border-radius: 8px;
+  text-align: left;
+}
+.tqe-row:hover { background: var(--surface-3, #f0f3f6); }
+.tqe-row svg { color: var(--text-muted, #697381); flex-shrink: 0; }
+.tqe-row .val { margin-left: auto; font-size: 12.5px; color: var(--accent, #1f6fd1); }
+.tqe-row .val.empty { color: var(--text-faint, #8a94a3); }
+.tqe-row .chev { color: var(--text-faint, #8a94a3); font-size: 12px; margin-left: 2px; }
+
+/* 第三层 A：时间下拉 */
+.tqe-time-pop {
+  position: fixed;
+  z-index: 1070;
+  background: var(--surface-2, #fff);
+  border: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop, 0 6px 28px rgba(23, 27, 33, 0.16));
+  overflow: hidden;
+  animation: tqe-pop-in 120ms ease-out;
+}
+.tqe-time-list {
+  max-height: 252px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.tqe-time-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, #2b3139);
+  font-family: inherit;
+  padding: 9px 12px;
+  border-radius: 7px;
+  text-align: left;
+}
+.tqe-time-list button:hover { background: var(--surface-3, #f0f3f6); }
+.tqe-time-list button.sel { color: var(--accent, #1f6fd1); font-weight: 600; }
+.tqe-time-list button.sel::after { content: "✓"; margin-left: auto; }
+
+.tqe-time-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  padding: 10px 14px;
+  background: var(--surface-1, #fbfcfd);
+}
+.tqe-time-input-row svg { color: var(--text-muted, #697381); flex-shrink: 0; }
+.tqe-time-input-row input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #1f6fd1);
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  min-width: 0;
+}
+.tqe-time-input-row .clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint, #8a94a3);
+  font-size: 15px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.tqe-time-input-row .clear:hover { color: var(--text-muted, #697381); }
+
+/* 第三层 B：提醒设置 */
+.tqe-remind-pop {
+  position: fixed;
+  z-index: 1070;
+  background: var(--surface-2, #fff);
+  border: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop, 0 6px 28px rgba(23, 27, 33, 0.16));
+  padding: 6px;
+  animation: tqe-pop-in 120ms ease-out;
+}
+.tqe-remind-pop .opt {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13.5px;
+  color: var(--text-primary, #2b3139);
+  font-family: inherit;
+  padding: 9px 12px;
+  border-radius: 7px;
+  text-align: left;
+}
+.tqe-remind-pop .opt:hover { background: var(--surface-3, #f0f3f6); }
+.tqe-remind-pop .opt.sel { color: var(--accent, #1f6fd1); font-weight: 600; }
+.tqe-remind-pop .opt .at { font-size: 12px; color: var(--text-faint, #8a94a3); }
+.tqe-remind-pop .opt.sel .at { color: var(--accent, #1f6fd1); opacity: 0.75; }
+
+.tqe-remind-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px 8px;
+  font-size: 13px;
+  color: var(--text-primary, #2b3139);
+}
+.tqe-remind-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tqe-remind-custom input[type="number"] {
+  width: 48px;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong, rgba(123, 145, 169, 0.22));
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  background: var(--surface-1, #fbfcfd);
+  color: var(--text-strong, #171b21);
+}
+.tqe-remind-custom input[type="time"] {
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong, rgba(123, 145, 169, 0.22));
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  background: var(--surface-1, #fbfcfd);
+  color: var(--text-strong, #171b21);
+}
+
+.tqe-remind-repeat {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line-soft, rgba(123, 145, 169, 0.14));
+  margin-top: 4px;
+  padding: 11px 12px 9px;
+  font-size: 13.5px;
+  color: var(--text-primary, #2b3139);
+}
+
+.tqe-switch {
+  margin-left: auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--surface-3, #f0f3f6);
+  border: 1px solid var(--line-strong, rgba(123, 145, 169, 0.22));
+  cursor: pointer;
+  position: relative;
+  transition: background 150ms ease;
+  padding: 0;
+}
+.tqe-switch::after {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(23, 27, 33, 0.2);
+  transition: transform 150ms ease;
+}
+.tqe-switch.on { background: var(--accent, #1f6fd1); border-color: var(--accent, #1f6fd1); }
+.tqe-switch.on::after { transform: translateX(16px); }
+
+.tqe-remind-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 6px 6px;
+}
+.tqe-remind-actions button {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tqe-remind-actions .btn-save {
+  background: var(--accent, #1f6fd1);
+  color: #fff;
+  border: 1px solid var(--accent, #1f6fd1);
+}
+.tqe-remind-actions .btn-save:hover { background: #1a61b8; }
+.tqe-remind-actions .btn-cancel {
+  background: var(--surface-2, #fff);
+  color: var(--text-muted, #697381);
+  border: 1px solid var(--line-strong, rgba(123, 145, 169, 0.22));
+}
+.tqe-remind-actions .btn-cancel:hover { background: var(--surface-3, #f0f3f6); }
+
+/* ===== 快捷编辑子窗口相关 ===== */
+/* 主窗口蒙版：子窗口浮层打开时拦截主界面点击并逐层关闭；完全透明、无变暗感 */
+.tqe-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1040;
+  background: transparent;
+}
+
+/* 子窗口模式：整窗透明，浮层自身带背景与阴影 */
+html.tqe-window,
+html.tqe-window body,
+html.tqe-window #root {
+  background: transparent !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tqe-popover, .tqe-date-popover, .tqe-time-pop, .tqe-remind-pop { animation: none; }
+  .tqe-switch, .tqe-switch::after { transition: none; }
+}

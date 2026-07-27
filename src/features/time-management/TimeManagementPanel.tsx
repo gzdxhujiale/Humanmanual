@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Plus, GripVertical, User, X, MoreHorizontal,
   ChevronDown, ChevronRight, Calendar as CalendarIcon, Clock,
-  Flag, Send, Type, AlignLeft, CheckCircle2, Circle
+  Type, AlignLeft, CheckCircle2, Circle
 } from 'lucide-react';
 import { DayPicker } from 'react-day-picker';
 import dayjs from 'dayjs';
@@ -15,6 +15,7 @@ import { usePreferencesStore } from '../settings/preferencesStore';
 import { useMissionStore } from '../mission/missionStore';
 import { todayYMD } from '../../lib/dateUtils';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
+import { openQuickEditWindow, requestQuickEditCloseLayer } from './quickEditWindow';
 import './timeManagement.css';
 
 // ==========================================
@@ -79,93 +80,6 @@ export const CollapsibleGroup: React.FC<CollapsibleGroupProps> = memo(({
           {children}
         </div>
       )}
-    </div>
-  );
-});
-
-// ==========================================
-// 2. QuickAddPopover Component
-// ==========================================
-interface QuickAddPopoverProps {
-  quadrant: QuadrantType;
-  onAdd: (title: string, quadrant: QuadrantType, deadline?: number) => void;
-  onClose: () => void;
-  triggerRef: React.RefObject<any>;
-}
-
-export const QuickAddPopover: React.FC<QuickAddPopoverProps> = memo(({ quadrant, onAdd, onClose, triggerRef }) => {
-  const [title, setTitle] = useState('');
-  const [deadline, setDeadline] = useState<string>('');
-
-  const popoverRef = useClickOutside<HTMLDivElement>(() => {
-    onClose();
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (title.trim()) {
-      onAdd(title.trim(), quadrant, deadline ? new Date(deadline).getTime() : undefined);
-      setTitle('');
-      setDeadline('');
-      onClose();
-    }
-  };
-
-  const top = triggerRef.current ? triggerRef.current.getBoundingClientRect().bottom + 8 : 0;
-  const left = triggerRef.current ? triggerRef.current.getBoundingClientRect().right - 280 : 0;
-
-  return (
-    <div 
-      ref={popoverRef}
-      className="tm-quick-add-popover" 
-      style={{
-        position: 'fixed',
-        top: `${top}px`,
-        left: `${left}px`,
-        width: '280px',
-        background: '#fff',
-        borderRadius: '8px',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
-        border: '1px solid rgba(123, 145, 169, 0.15)',
-        zIndex: 100,
-        padding: '12px'
-      }}
-    >
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <input
-          autoFocus
-          type="text"
-          placeholder="准备做什么？"
-          value={title}
-          onChange={e => setTitle(e.target.value)}
-          style={{
-            border: 'none',
-            outline: 'none',
-            fontSize: '14px',
-            color: 'var(--text-strong)',
-            width: '100%'
-          }}
-        />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--line-soft)', paddingTop: '8px', marginTop: '4px' }}>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--text-faint)', fontSize: '12px' }}>
-              <CalendarIcon size={14} />
-              <input 
-                type="date" 
-                value={deadline}
-                onChange={e => setDeadline(e.target.value)}
-                style={{ border: 'none', outline: 'none', color: 'var(--text-muted)', fontSize: '12px', background: 'transparent' }}
-              />
-            </label>
-            <button type="button" style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 0 }}>
-              <Flag size={14} />
-            </button>
-          </div>
-          <button type="submit" disabled={!title.trim()} style={{ background: title.trim() ? 'var(--accent)' : 'var(--surface-3)', color: title.trim() ? '#fff' : 'var(--text-faint)', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: title.trim() ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
-            添加 <Send size={12} />
-          </button>
-        </div>
-      </form>
     </div>
   );
 });
@@ -544,10 +458,11 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = memo(({ task, onC
 interface DailyQuadrantsProps {
   tasks: Task[];
   onToggleComplete: (taskId: string) => void;
-  onAddTask: (title: string, quadrant: QuadrantType, deadline?: number) => void;
+  /** 点击象限加号：在子窗口中打开快捷新建浮层 */
+  onCreateTask: (quadrant: QuadrantType, anchor: HTMLElement) => void;
   hideCompleted: boolean;
   onDeleteTask: (taskId: string) => void;
-  onEditTask: (task: Task) => void;
+  onEditTask: (task: Task, anchor: HTMLElement) => void;
   onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
 }
 
@@ -600,21 +515,15 @@ function getDefaultDeadlineForGroup(groupName: string, now: number): number | un
 export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
   tasks,
   onToggleComplete,
-  onAddTask,
+  onCreateTask,
   hideCompleted,
   onDeleteTask,
   onEditTask,
   onUpdateTask,
 }) => {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
-  const [activePopover, setActivePopover] = useState<QuadrantType | null>(null);
   const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  
-  const q1Ref = useRef<HTMLButtonElement>(null);
-  const q2Ref = useRef<HTMLButtonElement>(null);
-  const q3Ref = useRef<HTMLButtonElement>(null);
-  const q4Ref = useRef<HTMLButtonElement>(null);
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     setDraggedTaskId(taskId);
@@ -768,7 +677,7 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
           onDragOver={(e) => handleDragOverTask(e, task.id)}
           onDragLeave={handleDragLeaveTask}
           onDrop={(e) => handleDropOnTask(e, task)}
-          onClick={() => onEditTask(task)}
+          onClick={(e) => onEditTask(task, e.currentTarget)}
           style={{
             borderTop: isHovered && dropPosition === 'top' ? '2px solid var(--accent, #1f6fd1)' : undefined,
             borderBottom: isHovered && dropPosition === 'bottom' ? '2px solid var(--accent, #1f6fd1)' : undefined,
@@ -879,8 +788,6 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
       }
     });
 
-    const ref = type === 'Q1' ? q1Ref : type === 'Q2' ? q2Ref : type === 'Q3' ? q3Ref : q4Ref;
-
     return (
       <div 
         key={type}
@@ -896,8 +803,7 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button 
-              ref={ref}
-              onClick={() => setActivePopover(activePopover === type ? null : type)}
+              onClick={(e) => onCreateTask(type, e.currentTarget)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)' }}
             >
               <Plus size={18} />
@@ -949,17 +855,6 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
             </div>
           )}
         </div>
-
-        {activePopover === type && (
-          <QuickAddPopover
-            quadrant={type}
-            onAdd={(title, q, deadline) => {
-              onAddTask(title, q, deadline);
-            }}
-            onClose={() => setActivePopover(null)}
-            triggerRef={ref}
-          />
-        )}
       </div>
     );
   };
@@ -998,6 +893,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const setHideCompleted = (val: boolean) => setPreference('tm-hide-completed', String(val));
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [quickEditOpen, setQuickEditOpen] = useState(false);
   const [draftTasks, setDraftTasks] = useState<Record<string, string>>({});
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -1034,11 +930,36 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     }, false);
   };
 
-  const handleAddTaskToQuadrant = (title: string, quadrant: QuadrantType, deadline?: number) => {
+  const handleAddTaskToQuadrant = (title: string, quadrant: QuadrantType, extras?: { deadline?: number; reminder?: string; description?: string }) => {
     const task = addTask(title, quadrant, undefined);
-    if (deadline) {
-      updateTask(task.id, { deadline }, false);
+    const updates: Partial<Task> = {};
+    if (extras?.deadline) updates.deadline = extras.deadline;
+    if (extras?.reminder) updates.reminder = extras.reminder;
+    if (extras?.description) updates.description = extras.description;
+    if (Object.keys(updates).length > 0) {
+      updateTask(task.id, updates, false);
     }
+  };
+
+  // 快捷编辑/新建：在透明置顶子窗口中打开浮层，主窗口只留蒙版
+  const openTaskQuickEdit = (task: Task, anchor: HTMLElement) => {
+    setQuickEditOpen(true);
+    void openQuickEditWindow({
+      task,
+      anchorEl: anchor,
+      onSave: (taskId, updates, isHighFreq) => updateTask(taskId, updates, isHighFreq),
+      onClosed: () => setQuickEditOpen(false),
+    });
+  };
+
+  const openTaskQuickCreate = (quadrant: QuadrantType, anchor: HTMLElement) => {
+    setQuickEditOpen(true);
+    void openQuickEditWindow({
+      quadrant,
+      anchorEl: anchor,
+      onCreate: (q, draft) => handleAddTaskToQuadrant(draft.title, q, draft),
+      onClosed: () => setQuickEditOpen(false),
+    });
   };
 
   const handleAddTaskToRole = (e: React.KeyboardEvent<HTMLInputElement>, roleId: string) => {
@@ -1212,10 +1133,10 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
                 <DailyQuadrants
                   tasks={tasks}
                   onToggleComplete={handleToggleComplete}
-                  onAddTask={handleAddTaskToQuadrant}
+                  onCreateTask={openTaskQuickCreate}
                   hideCompleted={hideCompleted}
                   onDeleteTask={handleDeleteTask}
-                  onEditTask={(task) => setEditingTask(task)}
+                  onEditTask={openTaskQuickEdit}
                   onUpdateTask={handleUpdateTask}
                 />
               )}
@@ -1227,6 +1148,14 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
               task={editingTask}
               onClose={() => setEditingTask(null)}
               onSave={handleUpdateTask}
+            />
+          )}
+
+          {quickEditOpen && (
+            <div
+              className="tqe-mask"
+              onMouseDown={requestQuickEditCloseLayer}
+              aria-hidden
             />
           )}
         </div>
