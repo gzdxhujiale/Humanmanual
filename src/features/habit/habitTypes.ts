@@ -9,6 +9,7 @@ export interface Habit {
   group?: string;
   reminder?: string;
   autoPopupLog?: boolean;
+  checkInTime?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -4,20 +4,28 @@ import { FavoriteFocusTask, PomodoroRecord } from './pomodoroTypes';
 const STORAGE_KEY_RECORDS = 'fishworker_pomodoro_records_v1';
 const STORAGE_KEY_FAVORITES = 'fishworker_pomodoro_favorites_v1';
 const STORAGE_KEY_MIN_EFFECTIVE_MINS = 'fishworker_pomodoro_min_effective_mins_v1';
+const STORAGE_KEY_INITIALIZED = 'fishworker_pomodoro_initialized_v1';
 
 export interface PomodoroData {
   records: PomodoroRecord[];
   favoriteTasks: FavoriteFocusTask[];
 }
 
+export interface PomodoroDataResult {
+  records: PomodoroRecord[];
+  favoriteTasks: FavoriteFocusTask[];
+  isFromDb: boolean;
+}
+
 export const pomodoroService = {
-  async loadAll(): Promise<PomodoroData> {
+  async loadAll(): Promise<PomodoroDataResult> {
     try {
       const data = await invoke<PomodoroData>('pomodoro_load_all');
-      if (data && (data.records || data.favoriteTasks)) {
+      if (data && (data.records !== undefined || data.favoriteTasks !== undefined || (data as any).favorite_tasks !== undefined)) {
         return {
           records: data.records || [],
-          favoriteTasks: data.favoriteTasks || [],
+          favoriteTasks: data.favoriteTasks || (data as any).favorite_tasks || [],
+          isFromDb: true,
         };
       }
     } catch (e) {
@@ -29,15 +37,15 @@ export const pomodoroService = {
     let favoriteTasks: FavoriteFocusTask[] = [];
     try {
       const rawRecs = localStorage.getItem(STORAGE_KEY_RECORDS);
-      if (rawRecs) records = JSON.parse(rawRecs);
+      if (rawRecs !== null) records = JSON.parse(rawRecs);
 
       const rawFavs = localStorage.getItem(STORAGE_KEY_FAVORITES);
-      if (rawFavs) favoriteTasks = JSON.parse(rawFavs);
+      if (rawFavs !== null) favoriteTasks = JSON.parse(rawFavs);
     } catch (e) {
       console.error('Failed to parse local storage fallback for pomodoro', e);
     }
 
-    return { records, favoriteTasks };
+    return { records, favoriteTasks, isFromDb: false };
   },
 
   async getMinEffectiveMinutes(): Promise<number> {
@@ -95,7 +103,8 @@ export const pomodoroService = {
 
   async clearAllRecords(): Promise<void> {
     try {
-      localStorage.removeItem(STORAGE_KEY_RECORDS);
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
     } catch (e) {}
 
     try {

@@ -1,15 +1,970 @@
-import React from 'react';
-import { Plus, GripVertical, User, X, MoreHorizontal } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Plus, GripVertical, User, X, MoreHorizontal,
+  ChevronDown, ChevronRight, Calendar as CalendarIcon, Clock,
+  Flag, Send, Type, AlignLeft, CheckCircle2, Circle
+} from 'lucide-react';
+import { DayPicker } from 'react-day-picker';
+import dayjs from 'dayjs';
+import 'react-day-picker/dist/style.css';
 import { useTimeStore } from './timeManagementStore';
 import { QuadrantType, Task } from './timeManagementTypes';
-import { DailyQuadrants } from './DailyQuadrants';
 import { WeeklyPlanning } from './WeeklyPlanning';
-import { TaskDetailModal } from './TaskDetailModal';
 import { usePreferencesStore } from '../settings/preferencesStore';
+import { useMissionStore } from '../mission/MissionStore';
+import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import './timeManagement.css';
 
-import { useMissionStore } from '../mission/MissionStore';
+// ==========================================
+// 1. CollapsibleGroup Component
+// ==========================================
+interface CollapsibleGroupProps {
+  title: string;
+  count: number;
+  children: React.ReactNode;
+  defaultExpanded?: boolean;
+  titleColor?: string;
+}
 
+export function CollapsibleGroup({ title, count, children, defaultExpanded = true, titleColor }: CollapsibleGroupProps) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  if (count === 0) return null;
+
+  return (
+    <div className="tm-collapsible-group">
+      <div
+        className="tm-collapsible-header"
+        onClick={() => setIsExpanded(!isExpanded)}
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 0', cursor: 'pointer', color: titleColor || 'var(--text-faint)', fontSize: '12px' }}
+      >
+        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span style={{ fontWeight: titleColor ? 600 : 500 }}>{title}</span>
+        <span style={{ 
+          background: titleColor ? `${titleColor}18` : 'rgba(123, 145, 169, 0.1)', 
+          padding: '2px 8px', 
+          borderRadius: '10px', 
+          fontSize: '11px', 
+          color: titleColor || 'var(--text-muted)',
+          fontWeight: titleColor ? 600 : 400
+        }}>{count}</span>
+      </div>
+      {isExpanded && (
+        <div className="tm-collapsible-content" style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingLeft: '4px', marginTop: '-6px' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================
+// 2. QuickAddPopover Component
+// ==========================================
+interface QuickAddPopoverProps {
+  quadrant: QuadrantType;
+  onAdd: (title: string, quadrant: QuadrantType, deadline?: number) => void;
+  onClose: () => void;
+  triggerRef: React.RefObject<any>;
+}
+
+export function QuickAddPopover({ quadrant, onAdd, onClose, triggerRef }: QuickAddPopoverProps) {
+  const [title, setTitle] = useState('');
+  const [deadline, setDeadline] = useState<string>('');
+  
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node) && triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose, triggerRef]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (title.trim()) {
+      onAdd(title.trim(), quadrant, deadline ? new Date(deadline).getTime() : undefined);
+      setTitle('');
+      setDeadline('');
+      onClose();
+    }
+  };
+
+  const top = triggerRef.current ? triggerRef.current.getBoundingClientRect().bottom + 8 : 0;
+  const left = triggerRef.current ? triggerRef.current.getBoundingClientRect().right - 280 : 0; 
+
+  return (
+    <div 
+      ref={popoverRef}
+      className="tm-quick-add-popover" 
+      style={{
+        position: 'fixed',
+        top: `${top}px`,
+        left: `${left}px`,
+        width: '280px',
+        background: '#fff',
+        borderRadius: '8px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+        border: '1px solid rgba(123, 145, 169, 0.15)',
+        zIndex: 100,
+        padding: '12px'
+      }}
+    >
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <input
+          autoFocus
+          type="text"
+          placeholder="准备做什么？"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          style={{
+            border: 'none',
+            outline: 'none',
+            fontSize: '14px',
+            color: 'var(--text-strong)',
+            width: '100%'
+          }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--line-soft)', paddingTop: '8px', marginTop: '4px' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--text-faint)', fontSize: '12px' }}>
+              <CalendarIcon size={14} />
+              <input 
+                type="date" 
+                value={deadline}
+                onChange={e => setDeadline(e.target.value)}
+                style={{ border: 'none', outline: 'none', color: 'var(--text-muted)', fontSize: '12px', background: 'transparent' }}
+              />
+            </label>
+            <button type="button" style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 0 }}>
+              <Flag size={14} />
+            </button>
+          </div>
+          <button type="submit" disabled={!title.trim()} style={{ background: title.trim() ? 'var(--accent)' : 'var(--surface-3)', color: title.trim() ? '#fff' : 'var(--text-faint)', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: title.trim() ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+            添加 <Send size={12} />
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ==========================================
+// 3. DateTimePicker Component
+// ==========================================
+interface DateTimePickerProps {
+  value?: number;
+  onChange: (value?: number) => void;
+}
+
+export function DateTimePicker({ value, onChange }: DateTimePickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedDate = value ? new Date(value) : undefined;
+  const timeStr = value ? dayjs(selectedDate).format('HH:mm') : '12:00';
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isOpen]);
+
+  const handleDateSelect = (date: Date | undefined) => {
+    if (!date) {
+      onChange(undefined);
+      return;
+    }
+    
+    const current = value ? new Date(value) : new Date();
+    const hours = current.getHours();
+    const minutes = current.getMinutes();
+    
+    const newDate = new Date(date);
+    newDate.setHours(hours, minutes, 0, 0);
+    onChange(newDate.getTime());
+  };
+
+  const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [hoursStr, minutesStr] = e.target.value.split(':');
+    const hours = parseInt(hoursStr, 10) || 0;
+    const minutes = parseInt(minutesStr, 10) || 0;
+
+    const baseDate = selectedDate || new Date();
+    const newDate = new Date(baseDate);
+    newDate.setHours(hours, minutes, 0, 0);
+    onChange(newDate.getTime());
+  };
+
+  const handleClear = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onChange(undefined);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="tm-datetime-picker-container" ref={containerRef} style={{ position: 'relative' }}>
+      <div 
+        className="tm-datetime-trigger"
+        onClick={() => setIsOpen(!isOpen)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 12px',
+          border: '1px solid rgba(123, 145, 169, 0.25)',
+          borderRadius: '8px',
+          background: 'var(--surface-1)',
+          cursor: 'pointer',
+          fontSize: '14px',
+          color: value ? 'var(--text-strong)' : 'var(--text-faint)',
+          minHeight: '42px',
+          boxSizing: 'border-box'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <CalendarIcon size={16} style={{ color: 'var(--text-muted)' }} />
+          <span>
+            {value ? dayjs(selectedDate).format('YYYY-MM-DD HH:mm') : '选择截止日期时间...'}
+          </span>
+        </div>
+        {value && (
+          <button 
+            type="button" 
+            onClick={handleClear} 
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center', color: 'var(--text-faint)' }}
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
+      {isOpen && (
+        <div 
+          className="tm-datetime-popover"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            zIndex: 1001,
+            background: '#ffffff',
+            border: '1px solid rgba(123, 145, 169, 0.2)',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 16px -6px rgba(0, 0, 0, 0.05)',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}
+        >
+          <div className="tm-daypicker-wrapper">
+            <DayPicker
+              mode="single"
+              selected={selectedDate}
+              onSelect={handleDateSelect}
+            />
+          </div>
+
+          <div 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between', 
+              borderTop: '1px solid rgba(123, 145, 169, 0.1)', 
+              paddingTop: '12px',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--text-primary)' }}>
+              <Clock size={14} style={{ color: 'var(--text-muted)' }} />
+              <span>具体时间</span>
+            </div>
+            <input 
+              type="time" 
+              value={timeStr}
+              onChange={handleTimeChange}
+              style={{
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid rgba(123, 145, 169, 0.2)',
+                outline: 'none',
+                fontSize: '13px',
+                color: 'var(--text-strong)',
+                background: 'var(--surface-1)'
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================
+// 4. TaskDetailModal Component
+// ==========================================
+interface TaskDetailModalProps {
+  task: Task;
+  onClose: () => void;
+  onSave: (taskId: string, updates: Partial<Task>, isHighFreq?: boolean) => void;
+}
+
+const checkJsonEmpty = (val?: string): boolean => {
+  if (!val) return true;
+  const trimmed = val.trim();
+  if (!trimmed || trimmed === '{}') return true;
+  try {
+    const json = JSON.parse(trimmed);
+    if (!json.content || !Array.isArray(json.content) || json.content.length === 0) return true;
+    if (json.content.length === 1) {
+      const p = json.content[0];
+      if (p.type === 'paragraph' && (!p.content || p.content.length === 0)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+export function TaskDetailModal({ task, onClose, onSave }: TaskDetailModalProps) {
+  const [title, setTitle] = useState(task.title);
+  const [deadline, setDeadline] = useState<number | undefined>(task.deadline);
+
+  const latestTitle = useRef(title);
+  const latestDeadline = useRef(deadline);
+  const latestDescription = useRef(task.description || '');
+
+  useEffect(() => {
+    setTitle(task.title);
+    setDeadline(task.deadline);
+    latestTitle.current = task.title;
+    latestDeadline.current = task.deadline;
+    latestDescription.current = task.description || '';
+  }, [task.id, task.title, task.deadline, task.description]);
+
+  useEffect(() => {
+    latestTitle.current = title;
+  }, [title]);
+
+  useEffect(() => {
+    latestDeadline.current = deadline;
+  }, [deadline]);
+
+  const handleDescriptionChange = (jsonStr: string) => {
+    latestDescription.current = jsonStr;
+    triggerAutoSave({ description: jsonStr }, true);
+  };
+
+  const timers = useRef<Record<string, number>>({});
+
+  const triggerAutoSave = (updates: Partial<Task>, isHighFreq = true) => {
+    const key = Object.keys(updates)[0];
+    if (timers.current[key]) {
+      window.clearTimeout(timers.current[key]);
+    }
+
+    timers.current[key] = window.setTimeout(() => {
+      onSave(task.id, updates, isHighFreq);
+      delete timers.current[key];
+    }, 500);
+  };
+
+  const flushSaves = () => {
+    Object.keys(timers.current).forEach(key => {
+      window.clearTimeout(timers.current[key]);
+    });
+    timers.current = {};
+
+    const updates: Partial<Task> = {};
+    if (latestTitle.current.trim() && latestTitle.current !== task.title) {
+      updates.title = latestTitle.current.trim();
+    }
+    if (latestDeadline.current !== task.deadline) {
+      updates.deadline = latestDeadline.current;
+    }
+    const isDescEmpty = checkJsonEmpty(latestDescription.current);
+    const finalDesc = isDescEmpty ? '' : latestDescription.current;
+    const originalDesc = task.description || '';
+    if (finalDesc !== originalDesc) {
+      updates.description = finalDesc || undefined;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      onSave(task.id, updates, false);
+    }
+  };
+
+  const handleClose = () => {
+    flushSaves();
+    onClose();
+  };
+
+  const handleTitleChange = (newTitle: string) => {
+    setTitle(newTitle);
+    triggerAutoSave({ title: newTitle.trim() }, true);
+  };
+
+  const handleClearDeadline = () => {
+    setDeadline(undefined);
+    onSave(task.id, { deadline: undefined }, false);
+  };
+
+  const handleDeadlineChange = (newDeadlineStr: string) => {
+    const newDeadline = newDeadlineStr ? dayjs(newDeadlineStr).endOf('day').valueOf() : undefined;
+    setDeadline(newDeadline);
+    onSave(task.id, { deadline: newDeadline }, false);
+  };
+
+  return createPortal(
+    <div 
+      className="tm-modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleClose();
+        }
+      }}
+    >
+      <div className="tm-modal">
+        <div className="tm-modal-header">
+          <h3>任务详情</h3>
+          <button className="icon-button" onClick={handleClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="tm-modal-content">
+          <div className="tm-form-group">
+            <label>
+              <Type size={14} />
+              <span>任务标题</span>
+            </label>
+            <input 
+              type="text" 
+              value={title} 
+              onChange={(e) => handleTitleChange(e.target.value)} 
+              placeholder="输入任务标题..."
+              onBlur={() => {
+                if (title.trim() === '') {
+                  setTitle(task.title);
+                } else {
+                  flushSaves();
+                }
+              }}
+            />
+          </div>
+          <div className="tm-form-group">
+            <label>
+              <CalendarIcon size={14} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                <span>截止时间</span>
+                {deadline ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleClearDeadline();
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--primary-color, #165dff)',
+                      cursor: 'pointer',
+                      fontSize: '12px'
+                    }}
+                  >
+                    设为无日期
+                  </button>
+                ) : (
+                  <span style={{ fontSize: '12px', color: 'var(--text-faint, #86909c)' }}>未设置日期</span>
+                )}
+              </div>
+            </label>
+            <input
+              type="date"
+              value={deadline ? dayjs(deadline).format("YYYY-MM-DD") : ""}
+              onChange={(e) => handleDeadlineChange(e.target.value)}
+              onClick={(e) => {
+                try {
+                  (e.currentTarget as HTMLInputElement).showPicker?.();
+                } catch {}
+              }}
+              style={{
+                width: '100%',
+                borderRadius: '8px',
+                minHeight: '40px',
+                padding: '0 12px',
+                border: '1px solid rgba(123, 145, 169, 0.25)',
+                background: 'var(--surface-1)',
+                color: 'inherit',
+                fontSize: '14px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            />
+          </div>
+          <div className="tm-form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <label>
+              <AlignLeft size={14} />
+              <span>详细内容</span>
+            </label>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '180px', border: '1px solid rgba(123, 145, 169, 0.25)', borderRadius: '8px', overflow: 'hidden', background: 'var(--surface-1)' }}>
+              <ReactjsTiptapEditor
+                key={task.id}
+                initialContent={task.description || ''}
+                onChange={handleDescriptionChange}
+                showToolbar={false}
+                className="task-detail-reactjs-tiptap"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// ==========================================
+// 5. DailyQuadrants Component
+// ==========================================
+interface DailyQuadrantsProps {
+  tasks: Task[];
+  onToggleComplete: (taskId: string) => void;
+  onAddTask: (title: string, quadrant: QuadrantType, deadline?: number) => void;
+  hideCompleted: boolean;
+  onDeleteTask: (taskId: string) => void;
+  onEditTask: (task: Task) => void;
+  onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
+}
+
+const quadrantConfig: Record<QuadrantType, { title: string; desc: string; color: string; bgColor: string }> = {
+  Q1: { title: '重要且紧急', desc: '危机、急迫的问题', color: '#d32f2f', bgColor: '#fef2f2' },
+  Q2: { title: '重要不紧急', desc: '计划、预防、要事', color: '#25845a', bgColor: '#f0fdf4' },
+  Q3: { title: '紧急不重要', desc: '干扰、某些会议', color: '#d97706', bgColor: '#fffbeb' },
+  Q4: { title: '不重要不紧急', desc: '琐事、消遣', color: '#697381', bgColor: '#f8fafc' },
+};
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function getDeadlineGroup(deadline: number | undefined, now: number): string {
+  if (!deadline) return '无日期';
+  if (deadline < now) return '已过期';
+  const diffDays = (deadline - now) / MS_PER_DAY;
+  if (diffDays <= 1) return '一天内';
+  if (diffDays <= 3) return '三天内';
+  if (diffDays <= 7) return '一周内';
+  return '一周外';
+}
+
+function getDefaultDeadlineForGroup(groupName: string, now: number): number | undefined {
+  if (groupName === '已过期') {
+    return now - 3600 * 1000;
+  }
+  if (groupName === '一天内') {
+    const d = new Date(now + MS_PER_DAY);
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  }
+  if (groupName === '三天内') {
+    const d = new Date(now + 3 * MS_PER_DAY);
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  }
+  if (groupName === '一周内') {
+    const d = new Date(now + 7 * MS_PER_DAY);
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  }
+  if (groupName === '一周外') {
+    const d = new Date(now + 8 * MS_PER_DAY);
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  }
+  return undefined;
+}
+
+export function DailyQuadrants({ tasks, onToggleComplete, onAddTask, hideCompleted, onDeleteTask, onEditTask, onUpdateTask }: DailyQuadrantsProps) {
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [activePopover, setActivePopover] = useState<QuadrantType | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
+  
+  const q1Ref = useRef<HTMLButtonElement>(null);
+  const q2Ref = useRef<HTMLButtonElement>(null);
+  const q3Ref = useRef<HTMLButtonElement>(null);
+  const q4Ref = useRef<HTMLButtonElement>(null);
+
+  const handleDragStart = (e: React.DragEvent, taskId: string) => {
+    setDraggedTaskId(taskId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/tm-task-id', taskId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent, targetQuadrant: QuadrantType) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const taskId = e.dataTransfer.getData('application/tm-task-id') || draggedTaskId;
+    setDraggedTaskId(null);
+    setDragOverTaskId(null);
+    setDropPosition(null);
+    
+    if (taskId) {
+      onUpdateTask(taskId, { quadrant: targetQuadrant });
+    }
+  };
+
+  const handleDragOverTask = (e: React.DragEvent, taskId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (taskId === draggedTaskId) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relativeY = e.clientY - rect.top;
+    const position = relativeY > rect.height / 2 ? 'bottom' : 'top';
+    
+    setDragOverTaskId(taskId);
+    setDropPosition(position);
+  };
+
+  const handleDragLeaveTask = () => {
+    setDragOverTaskId(null);
+    setDropPosition(null);
+  };
+
+  const handleDropOnTask = (e: React.DragEvent, targetTask: Task) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const taskId = e.dataTransfer.getData('application/tm-task-id') || draggedTaskId;
+    setDragOverTaskId(null);
+    setDropPosition(null);
+    setDraggedTaskId(null);
+    
+    if (!taskId || taskId === targetTask.id) return;
+
+    const targetQTasks = tasks.filter(t => t.quadrant === targetTask.quadrant);
+    const filteredTasks = hideCompleted ? targetQTasks.filter(t => !t.completed) : targetQTasks;
+    
+    const now = Date.now();
+    const targetGroup = getDeadlineGroup(targetTask.deadline, now);
+    
+    const sameGroupTasks = [...filteredTasks].filter(t => 
+      t.completed === targetTask.completed && 
+      getDeadlineGroup(t.deadline, now) === targetGroup &&
+      t.id !== taskId
+    ).sort((a, b) => b.createdAt - a.createdAt);
+
+    const yIndex = sameGroupTasks.findIndex(t => t.id === targetTask.id);
+    if (yIndex === -1) return;
+
+    let newCreatedAt = targetTask.createdAt;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relativeY = e.clientY - rect.top;
+    const isBelow = relativeY > rect.height / 2;
+
+    if (!isBelow) {
+      if (yIndex === 0) {
+        newCreatedAt = targetTask.createdAt + 1000;
+      } else {
+        const prevTask = sameGroupTasks[yIndex - 1];
+        newCreatedAt = Math.round((prevTask.createdAt + targetTask.createdAt) / 2);
+      }
+    } else {
+      if (yIndex === sameGroupTasks.length - 1) {
+        newCreatedAt = targetTask.createdAt - 1000;
+      } else {
+        const nextTask = sameGroupTasks[yIndex + 1];
+        newCreatedAt = Math.round((targetTask.createdAt + nextTask.createdAt) / 2);
+      }
+    }
+
+    onUpdateTask(taskId, {
+      quadrant: targetTask.quadrant,
+      deadline: targetTask.deadline,
+      createdAt: newCreatedAt
+    });
+  };
+
+  const handleDropOnGroup = (e: React.DragEvent, targetQuadrant: QuadrantType, groupName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const taskId = e.dataTransfer.getData('application/tm-task-id') || draggedTaskId;
+    setDraggedTaskId(null);
+    setDragOverTaskId(null);
+    setDropPosition(null);
+    
+    if (!taskId) return;
+    
+    const taskObj = tasks.find(t => t.id === taskId);
+    if (!taskObj) return;
+
+    const now = Date.now();
+    const targetDeadline = getDefaultDeadlineForGroup(groupName, now);
+
+    const targetQTasks = tasks.filter(t => t.quadrant === targetQuadrant);
+    const filteredTasks = hideCompleted ? targetQTasks.filter(t => !t.completed) : targetQTasks;
+    const sameGroupTasks = filteredTasks.filter(t => 
+      t.completed === taskObj.completed && 
+      getDeadlineGroup(t.deadline, now) === groupName &&
+      t.id !== taskId
+    );
+
+    let newCreatedAt = Date.now();
+    if (sameGroupTasks.length > 0) {
+      newCreatedAt = Math.max(...sameGroupTasks.map(t => t.createdAt)) + 1000;
+    }
+
+    onUpdateTask(taskId, {
+      quadrant: targetQuadrant,
+      deadline: targetDeadline,
+      createdAt: newCreatedAt
+    });
+  };
+
+  const renderTasks = (taskList: Task[], color: string) => {
+    const now = Date.now();
+    return taskList.map(task => {
+      const isHovered = dragOverTaskId === task.id;
+      const isExpired = task.deadline && task.deadline < now && !task.completed;
+      return (
+        <div 
+          key={task.id} 
+          className={`tm-task-item-minimal ${task.completed ? 'completed' : ''}`}
+          draggable
+          onDragStart={(e) => handleDragStart(e, task.id)}
+          onDragOver={(e) => handleDragOverTask(e, task.id)}
+          onDragLeave={handleDragLeaveTask}
+          onDrop={(e) => handleDropOnTask(e, task)}
+          onClick={() => onEditTask(task)}
+          style={{
+            borderTop: isHovered && dropPosition === 'top' ? '2px solid var(--accent, #1f6fd1)' : undefined,
+            borderBottom: isHovered && dropPosition === 'bottom' ? '2px solid var(--accent, #1f6fd1)' : undefined,
+            paddingTop: isHovered && dropPosition === 'top' ? '4px' : undefined,
+            paddingBottom: isHovered && dropPosition === 'bottom' ? '4px' : undefined,
+          }}
+        >
+          <button 
+            className="tm-task-checkbox" 
+            onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
+            type="button"
+          >
+            {task.completed ? <CheckCircle2 size={16} color={color} /> : <Circle size={16} />}
+          </button>
+          <div className="tm-task-content-wrapper" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '4px', minWidth: 0 }}>
+            <span className="tm-task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</span>
+            {isExpired && (
+              <span
+                className="tm-overdue-tag"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const today = new Date();
+                  today.setHours(23, 59, 59, 999);
+                  onUpdateTask(task.id, { deadline: today.getTime() });
+                }}
+                title="点击延期至今日"
+                style={{
+                  fontSize: '10px',
+                  color: '#dc2626',
+                  backgroundColor: '#fef2f2',
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  border: '1px solid #fca5a5',
+                  flexShrink: 0,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  userSelect: 'none',
+                }}
+                onMouseEnter={(e) => {
+                  const target = e.currentTarget;
+                  target.textContent = '延期';
+                  target.style.backgroundColor = '#dc2626';
+                  target.style.color = '#ffffff';
+                  target.style.borderColor = '#dc2626';
+                }}
+                onMouseLeave={(e) => {
+                  const target = e.currentTarget;
+                  target.textContent = '已过期';
+                  target.style.backgroundColor = '#fef2f2';
+                  target.style.color = '#dc2626';
+                  target.style.borderColor = '#fca5a5';
+                }}
+              >
+                已过期
+              </span>
+            )}
+            {task.description && (
+              <span className="tm-task-meta" style={{ display: 'flex', alignItems: 'center', flexShrink: 0, color: 'var(--text-muted)' }}>
+                <AlignLeft size={12} />
+              </span>
+            )}
+          </div>
+          <button 
+            className="icon-button tm-task-delete-btn" 
+            onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      );
+    });
+  };
+
+  const renderQuadrant = (type: QuadrantType) => {
+    const config = quadrantConfig[type];
+    let qTasks = tasks.filter(t => t.quadrant === type);
+    
+    if (hideCompleted) {
+      qTasks = qTasks.filter(t => !t.completed);
+    }
+    
+    const sortedTasks = [...qTasks].sort((a, b) => {
+      if (a.completed === b.completed) return b.createdAt - a.createdAt;
+      return a.completed ? 1 : -1;
+    });
+
+    const now = Date.now();
+
+    const expired: Task[] = [];
+    const noDate: Task[] = [];
+    const within1Day: Task[] = [];
+    const within3Days: Task[] = [];
+    const within1Week: Task[] = [];
+    const beyond1Week: Task[] = [];
+
+    sortedTasks.forEach(t => {
+      if (!t.deadline) {
+        noDate.push(t);
+      } else if (t.deadline < now) {
+        expired.push(t);
+      } else {
+        const diffDays = (t.deadline - now) / MS_PER_DAY;
+        if (diffDays <= 1) within1Day.push(t);
+        else if (diffDays <= 3) within3Days.push(t);
+        else if (diffDays <= 7) within1Week.push(t);
+        else beyond1Week.push(t);
+      }
+    });
+
+    const ref = type === 'Q1' ? q1Ref : type === 'Q2' ? q2Ref : type === 'Q3' ? q3Ref : q4Ref;
+
+    return (
+      <div 
+        key={type}
+        className={`quadrant-box quadrant-${type.toLowerCase()}`}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDrop={(e) => handleDrop(e, type)}
+      >
+        <div className="quadrant-header">
+          <div className="quadrant-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ background: config.color, color: '#fff', width: '20px', height: '20px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>{type[1]}</div>
+            <h3 style={{ color: config.color }}>{config.title}</h3>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button 
+              ref={ref}
+              onClick={() => setActivePopover(activePopover === type ? null : type)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-strong)' }}
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+        </div>
+        
+        <div className="quadrant-task-list">
+          {expired.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '已过期')}>
+              <CollapsibleGroup title="已过期" count={expired.length} titleColor="#d32f2f">
+                {renderTasks(expired, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+          {within1Day.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '一天内')}>
+              <CollapsibleGroup title="一天内" count={within1Day.length}>
+                {renderTasks(within1Day, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+          {within3Days.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '三天内')}>
+              <CollapsibleGroup title="三天内" count={within3Days.length}>
+                {renderTasks(within3Days, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+          {within1Week.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '一周内')}>
+              <CollapsibleGroup title="一周内" count={within1Week.length}>
+                {renderTasks(within1Week, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+          {beyond1Week.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '一周外')}>
+              <CollapsibleGroup title="一周外" count={beyond1Week.length}>
+                {renderTasks(beyond1Week, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+          {noDate.length > 0 && (
+            <div onDragOver={handleDragOver} onDrop={(e) => handleDropOnGroup(e, type, '无日期')}>
+              <CollapsibleGroup title="无日期" count={noDate.length}>
+                {renderTasks(noDate, config.color)}
+              </CollapsibleGroup>
+            </div>
+          )}
+        </div>
+
+        {activePopover === type && (
+          <QuickAddPopover
+            quadrant={type}
+            onAdd={(title, q, deadline) => {
+              onAddTask(title, q, deadline);
+            }}
+            onClose={() => setActivePopover(null)}
+            triggerRef={ref}
+          />
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="daily-quadrants-layout">
+      {renderQuadrant('Q1')}
+      {renderQuadrant('Q2')}
+      {renderQuadrant('Q3')}
+      {renderQuadrant('Q4')}
+    </div>
+  );
+}
+
+// ==========================================
+// 6. TimeManagementPanel Main Component
+// ==========================================
 interface TimeManagementPanelProps {
   mode?: 'weekly' | 'daily';
 }
@@ -32,18 +987,18 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const setPreference = usePreferencesStore(state => state.setPreference);
   const setHideCompleted = (val: boolean) => setPreference('tm-hide-completed', String(val));
 
-  const [editingTask, setEditingTask] = React.useState<Task | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-  const [draftTasks, setDraftTasks] = React.useState<Record<string, string>>({});
-  const [menuOpen, setMenuOpen] = React.useState(false);
-  const menuRef = React.useRef<HTMLDivElement>(null);
+  const [draftTasks, setDraftTasks] = useState<Record<string, string>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     useMissionStore.getState().init();
     syncAllFromDB();
   }, [syncAllFromDB]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -53,7 +1008,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (tasks.length === 0) return;
 
     const todayStr = new Date().toISOString().split('T')[0];
@@ -68,7 +1023,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     });
 
     if (hasUpdates) {
-      // Find which tasks were updated and trigger individual syncs
       tasks.forEach((oldTask, i) => {
         const newTask = updatedTasks[i];
         if (oldTask.quadrant !== newTask.quadrant) {
@@ -86,10 +1040,8 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     updateTask(taskId, {
       completed: isCompleted,
       completedAt: isCompleted ? Date.now() : undefined
-    }, false); // false = not high freq
+    }, false);
   };
-
-
 
   const handleAddTaskToQuadrant = (title: string, quadrant: QuadrantType, deadline?: number) => {
     const task = addTask(title, quadrant, undefined);
@@ -97,7 +1049,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
       updateTask(task.id, { deadline }, false);
     }
   };
-
 
   const handleAddTaskToRole = (e: React.KeyboardEvent<HTMLInputElement>, roleId: string) => {
     if (e.key === 'Enter') {
@@ -112,7 +1063,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const handleScheduleTask = (taskId: string, date: string | undefined, timeOfDay?: 'morning' | 'afternoon') => {
     const updates: Partial<Task> = { scheduledDate: date, timeOfDay };
     if (date) {
-      // Set deadline to the end of the scheduled day
       const d = new Date(date);
       d.setHours(23, 59, 59, 999);
       updates.deadline = d.getTime();
@@ -139,7 +1089,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   return (
     <section className="time-management-page">
       <div className="tm-shell" style={{ flexDirection: 'column', display: 'flex', height: '100%', width: '100%' }}>
-        {/* Time Management Menu Bar (rendered only in daily mode) */}
         {mode === 'daily' && (
           <header className="tm-top-menubar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 24px', borderBottom: '1px solid var(--line-soft)', background: 'transparent', flex: 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
@@ -200,7 +1149,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
           </header>
         )}
 
-        {/* Time Management Content Area */}
         <div className="tm-content-area" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {activeTab === 'weekly' && (
             <aside className="tm-roles-sidebar" style={{ width: '200px', flex: 'none', display: 'flex', flexDirection: 'column' }}>

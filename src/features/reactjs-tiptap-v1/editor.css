@@ -30,7 +30,7 @@
 .bg-popover,
 [data-radix-popper-content-wrapper],
 [data-radix-popper-content-wrapper] [role="dialog"],
-[data-radix-popper-content-wrapper] > div,
+[data-radix-popper-content-wrapper]>div,
 div[data-richtext-portal],
 .easydrawer-wrapper {
   background-color: #ffffff !important;
@@ -105,25 +105,32 @@ div[data-richtext-portal] {
 /* ── Compact Spacing for Lists and Block Elements ── */
 .reactjs-tiptap-editor .ProseMirror ul,
 .reactjs-tiptap-editor .ProseMirror ol,
-.reactjs-tiptap-editor .ProseMirror [data-type="taskList"],
 .template-reactjs-tiptap .ProseMirror ul,
 .template-reactjs-tiptap .ProseMirror ol,
-.template-reactjs-tiptap .ProseMirror [data-type="taskList"],
 .task-detail-reactjs-tiptap .ProseMirror ul,
 .task-detail-reactjs-tiptap .ProseMirror ol,
-.task-detail-reactjs-tiptap .ProseMirror [data-type="taskList"],
 .note-drawer-reactjs-tiptap .ProseMirror ul,
-.note-drawer-reactjs-tiptap .ProseMirror ol,
-.note-drawer-reactjs-tiptap .ProseMirror [data-type="taskList"] {
+.note-drawer-reactjs-tiptap .ProseMirror ol {
   margin-top: 0.375rem !important;
   margin-bottom: 0.375rem !important;
   padding-left: 1.5rem !important;
   padding-right: 0 !important;
 }
 
-.ProseMirror > ul,
-.ProseMirror > ol,
-.ProseMirror > [data-type="taskList"] {
+/* Task lists have a wider left padding than bullet/numbered lists */
+.reactjs-tiptap-editor .ProseMirror [data-type="taskList"],
+.template-reactjs-tiptap .ProseMirror [data-type="taskList"],
+.task-detail-reactjs-tiptap .ProseMirror [data-type="taskList"],
+.note-drawer-reactjs-tiptap .ProseMirror [data-type="taskList"] {
+  margin-top: 0.375rem !important;
+  margin-bottom: 0.375rem !important;
+  padding-left: 0.25rem !important;
+  padding-right: 0 !important;
+}
+
+.ProseMirror>ul,
+.ProseMirror>ol,
+.ProseMirror>[data-type="taskList"] {
   margin-top: 0.375rem !important;
   margin-bottom: 0.375rem !important;
 }
@@ -197,12 +204,11 @@ div[data-richtext-portal] {
 }
 
 /* Hide nested child lists when list item is collapsed */
-.ProseMirror li[data-collapsed="true"] > ul,
-.ProseMirror li[data-collapsed="true"] > ol,
-.ProseMirror li[data-collapsed="true"] > [data-type="taskList"],
-.ProseMirror [data-type="taskItem"][data-collapsed="true"] > ul,
-.ProseMirror [data-type="taskItem"][data-collapsed="true"] > ol,
-.ProseMirror [data-type="taskItem"][data-collapsed="true"] > [data-type="taskList"] {
+.ProseMirror li[data-collapsed="true"]>ul,
+.ProseMirror li[data-collapsed="true"]>ol,
+.ProseMirror li[data-collapsed="true"]>[data-type="taskList"],
+.ProseMirror [data-type="taskItem"][data-collapsed="true"]>ul,
+.ProseMirror [data-type="taskItem"][data-collapsed="true"]>ol,
+.ProseMirror [data-type="taskItem"][data-collapsed="true"]>[data-type="taskList"] {
   display: none !important;
 }
-

@@ -141,7 +141,7 @@ export function WeeklyPlanning({ roles, tasks, onScheduleTask, hideCompleted, on
                           {task.deadline && (
                             <div className={`tm-task-deadline ${task.deadline < Date.now() ? 'overdue' : ''}`}>
                               <Clock size={12} />
-                              {new Date(task.deadline).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                              {new Date(task.deadline).toLocaleDateString([], {month: 'numeric', day: 'numeric'})}
                             </div>
                           )}
                         </div>

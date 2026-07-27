@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { ClipboardList, Database, LayoutTemplate, RefreshCw, Settings, X } from "lucide-react";
+import { ClipboardList, Database, LayoutTemplate, RefreshCw, Settings, Sliders, X } from "lucide-react";
 import { DatabaseSettingsPanel } from "./components/DatabaseSettingsPanel";
 import { TemplateSettingsPanel } from "./components/TemplateSettingsPanel";
 import { UpdateSettingsPanel } from "./components/UpdateSettingsPanel";
 import { ListSettingsPanel } from "./components/ListSettingsPanel";
+import { GeneralSettingsPanel } from "./components/GeneralSettingsPanel";
 import { useUpdateStore } from "./updateStore";
 
-type SettingsTab = "templates" | "lists" | "database" | "update";
+type SettingsTab = "general" | "templates" | "lists" | "database" | "update";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("templates");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const { updateStatus } = useUpdateStore();
 
   const hasUpdateReady = updateStatus === "available" || updateStatus === "ready_to_restart";
@@ -30,6 +31,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <Settings size={18} />
             <span>设置</span>
           </div>
+
+          <button 
+            className={`settings-nav-item ${activeTab === "general" ? "active" : ""}`} 
+            type="button"
+            onClick={() => setActiveTab("general")}
+          >
+            <Sliders size={16} />
+            <span>通用设置</span>
+          </button>
 
           <button 
             className={`settings-nav-item ${activeTab === "templates" ? "active" : ""}`} 
@@ -74,6 +84,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <main className="settings-content">
           <header className="settings-header">
             <h2>
+              {activeTab === "general" && "通用设置"}
               {activeTab === "lists" && "清单设置"}
               {activeTab === "templates" && "模板管理"}
               {activeTab === "database" && "数据库连接配置"}
@@ -85,6 +96,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </header>
 
           <div className="settings-panels-wrapper">
+            {activeTab === "general" && <GeneralSettingsPanel />}
             {activeTab === "lists" && <ListSettingsPanel />}
             {activeTab === "templates" && <TemplateSettingsPanel />}
             {activeTab === "database" && <DatabaseSettingsPanel />}

@@ -111,6 +111,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, None))
         .setup(|app| {
             // Establish local SQLite connection (offline-first primary storage)
             let sqlite_pool = tauri::async_runtime::block_on(async {

@@ -1,9 +1,47 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Template, getTemplatePreviewText } from './templateTypes';
 import { X, Edit2, Trash2 } from 'lucide-react';
 import ReactjsTiptapEditor from '../reactjs-tiptap-v1/components/Editor/Editor';
-import { useConfirmDialog } from '../../components/ui/ConfirmDeleteDialog';
+import { useConfirmDialog, ConfirmDeleteDialog } from '../../components/ui/ConfirmDeleteDialog';
 
+// ==========================================
+// 1. ConfirmBubble Component
+// ==========================================
+interface ConfirmBubbleProps {
+  isOpen: boolean;
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  children: React.ReactNode;
+  position?: 'top' | 'bottom' | 'left' | 'right';
+}
+
+export const ConfirmBubble: React.FC<ConfirmBubbleProps> = ({
+  isOpen,
+  message,
+  onConfirm,
+  onCancel,
+  children,
+}) => {
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      {children}
+      <ConfirmDeleteDialog
+        isOpen={isOpen}
+        title="确认删除"
+        description={message}
+        confirmText="确定"
+        cancelText="取消"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+};
+
+// ==========================================
+// 2. TemplateModal Component
+// ==========================================
 interface TemplateModalProps {
   templates: Template[];
   onSelect: (template: Template) => void;
@@ -11,7 +49,6 @@ interface TemplateModalProps {
   onEdit?: (id: string, name: string, content: string) => void;
   onDelete?: (id: string) => void;
 }
-
 
 export function TemplateModal({ templates, onSelect, onClose, onEdit, onDelete }: TemplateModalProps) {
   const { confirm: confirmDelete } = useConfirmDialog();

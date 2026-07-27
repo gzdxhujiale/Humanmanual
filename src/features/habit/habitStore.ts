@@ -44,7 +44,11 @@ export const useHabitStore = create<HabitState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const data = await habitService.loadAll();
-      set({ habits: data.habits, checkIns: data.checkIns, isLoading: false });
+      const habits = (data.habits || []).map((h) => ({
+        ...h,
+        checkInTime: h.checkInTime || h.reminder || '08:00:00',
+      }));
+      set({ habits, checkIns: data.checkIns || [], isLoading: false });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
     }
@@ -53,7 +57,12 @@ export const useHabitStore = create<HabitState>((set, get) => ({
   createHabit: async (payload: Partial<Habit>) => {
     try {
       const newHabit = await habitService.createHabit(payload);
-      set((state) => ({ habits: [newHabit, ...state.habits] }));
+      const formattedHabit = {
+        ...newHabit,
+        checkInTime: newHabit.checkInTime || newHabit.reminder || payload.checkInTime || '08:00:00',
+      };
+      set((state) => ({ habits: [formattedHabit, ...state.habits] }));
+      await get().loadAll();
     } catch (error: any) {
       console.error('Failed to create habit', error);
       throw error;
@@ -82,6 +91,7 @@ export const useHabitStore = create<HabitState>((set, get) => ({
         checkIns: state.checkIns.filter((c) => c.habitId !== id),
       }));
       await habitService.deleteHabit(id);
+      await get().loadAll();
     } catch (error: any) {
       console.error('Failed to delete habit', error);
       get().loadAll();
@@ -138,26 +148,43 @@ export const useHabitStore = create<HabitState>((set, get) => ({
 
   getHabitsForDate: (dateStr: string) => {
     const { habits } = get();
-    const queryDate = new Date(dateStr);
     
-    return habits.filter(habit => {
-      // 1. startDate logic
-      const startDateStr = habit.startDate || habit.createdAt.slice(0, 10);
+    return habits.filter((habit) => {
+      // 1. startDate logic (safely extract YYYY-MM-DD)
+      let startDateStr = habit.startDate;
+      if (!startDateStr || startDateStr.trim() === '') {
+        startDateStr = habit.createdAt ? habit.createdAt.slice(0, 10) : dateStr;
+      }
+
       if (dateStr < startDateStr) return false;
 
       // 2. duration logic
-      if (habit.duration === '21days') {
-        const startDateObj = new Date(startDateStr);
-        const endDateObj = new Date(startDateObj);
-        endDateObj.setDate(startDateObj.getDate() + 20); // 21 days inclusive
-        
-        if (queryDate > endDateObj) {
-          return false;
+      if (habit.duration && habit.duration !== 'forever') {
+        let days = 0;
+        if (habit.duration.startsWith('custom:')) {
+          days = parseInt(habit.duration.replace('custom:', ''), 10) || 0;
+        } else {
+          days = parseInt(habit.duration.replace(/[^0-9]/g, ''), 10) || 0;
+        }
+
+        if (days > 0) {
+          const parts = startDateStr.split('-').map(Number);
+          if (parts.length === 3 && !parts.some(isNaN)) {
+            const startDateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+            const endDateObj = new Date(startDateObj);
+            endDateObj.setDate(startDateObj.getDate() + (days - 1));
+
+            const qParts = dateStr.split('-').map(Number);
+            if (qParts.length === 3 && !qParts.some(isNaN)) {
+              const queryDateObj = new Date(qParts[0], qParts[1] - 1, qParts[2]);
+              if (queryDateObj > endDateObj) {
+                return false;
+              }
+            }
+          }
         }
       }
 
-      // 3. frequency logic
-      // Currently, both 'everyday' and 'weekly' pass through if they fall within the valid date range.
       return true;
     });
   },

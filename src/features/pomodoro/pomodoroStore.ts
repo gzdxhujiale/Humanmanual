@@ -6,6 +6,7 @@ import { createSyncEngine } from '../../lib/createSyncEngine';
 
 const STORAGE_KEY_RECORDS = 'fishworker_pomodoro_records_v1';
 const STORAGE_KEY_FAVORITES = 'fishworker_pomodoro_favorites_v1';
+const STORAGE_KEY_INITIALIZED = 'fishworker_pomodoro_initialized_v1';
 
 export const FOCUS_DURATION_DEFAULT = 25 * 60; // 25 minutes in seconds
 export const BREAK_DURATION_DEFAULT = 5 * 60;   // 5 minutes in seconds
@@ -149,10 +150,12 @@ const initialMockRecords: PomodoroRecord[] = [
 const loadSavedRecords = (): PomodoroRecord[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_RECORDS);
-    if (raw) return JSON.parse(raw);
+    if (raw !== null) return JSON.parse(raw);
   } catch (e) {
     console.error('Failed to load records from localStorage', e);
   }
+  const isInit = localStorage.getItem(STORAGE_KEY_INITIALIZED);
+  if (isInit === 'true') return [];
   return initialMockRecords;
 };
 
@@ -167,7 +170,7 @@ const saveRecords = (records: PomodoroRecord[]) => {
 const loadSavedFavorites = (): FavoriteFocusTask[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_FAVORITES);
-    if (raw) return JSON.parse(raw);
+    if (raw !== null) return JSON.parse(raw);
   } catch (e) {
     console.error('Failed to load favorites from localStorage', e);
   }
@@ -328,8 +331,37 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
     try {
       const dbData = await pomodoroService.loadAll();
       const minMins = await pomodoroService.getMinEffectiveMinutes();
-      const mergedRecords = dbData && dbData.records.length > 0 ? dbData.records : get().records;
-      const mergedFavs = dbData && dbData.favoriteTasks.length > 0 ? dbData.favoriteTasks : get().favoriteTasks;
+      const isInit = localStorage.getItem(STORAGE_KEY_INITIALIZED);
+
+      let mergedRecords: PomodoroRecord[];
+      let mergedFavs: FavoriteFocusTask[];
+
+      if (dbData.isFromDb) {
+        if (!isInit && dbData.records.length === 0) {
+          // Brand new app launch before any records or initialization:
+          mergedRecords = initialMockRecords;
+          localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
+          for (const rec of initialMockRecords) {
+            pomodoroService.upsertRecord(rec).catch(() => {});
+          }
+        } else {
+          // DB is ground truth! (Even if [])
+          mergedRecords = dbData.records;
+          localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
+        }
+
+        if (!isInit && dbData.favoriteTasks.length === 0) {
+          mergedFavs = initialMockFavorites;
+          for (const fav of initialMockFavorites) {
+            pomodoroService.upsertFavoriteTask(fav).catch(() => {});
+          }
+        } else {
+          mergedFavs = dbData.favoriteTasks.length > 0 ? dbData.favoriteTasks : get().favoriteTasks;
+        }
+      } else {
+        mergedRecords = dbData.records;
+        mergedFavs = dbData.favoriteTasks;
+      }
 
       saveRecords(mergedRecords);
       saveFavorites(mergedFavs);
@@ -536,6 +568,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
         };
 
         const updatedRecords = [newRecord, ...state.records];
+        localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
         saveRecords(updatedRecords);
 
         // Schedule sync engine for record
@@ -714,6 +747,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
     };
 
     const updated = [newRecord, ...get().records];
+    localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
     saveRecords(updated);
     set({ records: updated });
 
@@ -722,6 +756,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
 
   deleteRecord: (id: string) => {
     const updated = get().records.filter((r) => r.id !== id);
+    localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
     saveRecords(updated);
     set({ records: updated });
 
@@ -731,6 +766,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
 
   clearAllRecords: () => {
     get().records.forEach((r) => syncEngine.cancel(`rec:${r.id}`));
+    localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
     saveRecords([]);
     set({ records: [] });
     pomodoroService.clearAllRecords().catch(() => {});

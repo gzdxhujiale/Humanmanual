@@ -14,6 +14,21 @@ function genId(prefix: string): string {
 const HIGH_FREQ_DELAY = 500;
 const LOW_FREQ_DELAY = 300;
 
+let noteSyncChannel: BroadcastChannel | null = null;
+try {
+  if (typeof BroadcastChannel !== 'undefined') {
+    noteSyncChannel = new BroadcastChannel('humanmanual_note_sync');
+  }
+} catch (e) {}
+
+function broadcastNoteUpdate(noteId: string, updates: Partial<Note>) {
+  if (noteSyncChannel) {
+    try {
+      noteSyncChannel.postMessage({ type: 'NOTE_UPDATED', noteId, updates });
+    } catch (e) {}
+  }
+}
+
 interface ListsStoreState {
   data: ListsData;
   initialized: boolean;
@@ -44,6 +59,7 @@ interface ListsStoreState {
   updateNote: (id: string, updates: Partial<Note>) => void;
   deleteNote: (id: string) => void;
   moveNoteAndReorder: (noteId: string, groupId: string | null, targetIndex?: number) => void;
+  moveNoteToList: (noteId: string, targetListId: string, targetGroupId?: string | null) => void;
   reorderNotes: (orderedIds: string[]) => void;
   
   // Note Groups
@@ -117,6 +133,21 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
           },
           initialized: true
         });
+
+        if (noteSyncChannel) {
+          noteSyncChannel.onmessage = (event) => {
+            if (event.data?.type === 'NOTE_UPDATED') {
+              const { noteId, updates } = event.data;
+              const data = get().data;
+              const index = data.notes.findIndex(n => n.id === noteId);
+              if (index !== -1) {
+                const newNotes = [...data.notes];
+                newNotes[index] = { ...newNotes[index], ...updates, updatedAt: Date.now() };
+                set({ data: { ...data, notes: newNotes } });
+              }
+            }
+          };
+        }
       } catch (e) {
         console.error('Failed to load from SQLite:', e);
         set({ initialized: true });
@@ -384,6 +415,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
       const newNotes = [...data.notes];
       newNotes[index] = { ...newNotes[index], ...updates, updatedAt: Date.now() };
       set({ data: { ...data, notes: newNotes } });
+      broadcastNoteUpdate(id, updates);
       const note = newNotes[index];
       syncEngine.schedule(`note:${id}`, () => listsService.upsertNote(note), HIGH_FREQ_DELAY);
     }
@@ -452,6 +484,39 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
     const updatedNote = newNotes.find(n => n.id === noteId);
 
     syncEngine.schedule(`note:${noteId}`, () => listsService.moveNote(noteId, note.listId, groupId, updatedNote?.sortOrder || 0), LOW_FREQ_DELAY);
+  },
+
+  moveNoteToList: (noteId, targetListId, targetGroupId = null) => {
+    const data = get().data;
+    const noteIndex = data.notes.findIndex(n => n.id === noteId);
+    if (noteIndex === -1) return;
+
+    const oldNote = data.notes[noteIndex];
+    if (oldNote.listId === targetListId && oldNote.groupId === targetGroupId) return;
+
+    const oldListId = oldNote.listId;
+    const targetListNotes = data.notes.filter(n => n.listId === targetListId);
+    const maxSortOrder = targetListNotes.reduce((max, n) => Math.max(max, n.sortOrder || 0), -1);
+    const newSortOrder = maxSortOrder + 1;
+
+    const newNotes = [...data.notes];
+    newNotes[noteIndex] = {
+      ...oldNote,
+      listId: targetListId,
+      groupId: targetGroupId,
+      sortOrder: newSortOrder,
+      updatedAt: Date.now()
+    };
+
+    const newLists = data.lists.map(l => {
+      if (l.id === oldListId) return { ...l, itemCount: Math.max(0, (l.itemCount || 0) - 1) };
+      if (l.id === targetListId) return { ...l, itemCount: (l.itemCount || 0) + 1 };
+      return l;
+    });
+
+    set({ data: { ...data, notes: newNotes, lists: newLists } });
+
+    syncEngine.schedule(`note:${noteId}`, () => listsService.moveNote(noteId, targetListId, targetGroupId, newSortOrder), LOW_FREQ_DELAY);
   },
 
   reorderNotes: (orderedIds) => {

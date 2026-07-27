@@ -18,6 +18,8 @@ pub struct Habit {
     pub duration: Option<String>,
     pub group: Option<String>,
     pub reminder: Option<String>,
+    #[serde(rename = "checkInTime")]
+    pub check_in_time: Option<String>,
     #[serde(rename = "autoPopupLog")]
     pub auto_popup_log: bool,
     #[serde(rename = "createdAt")]
@@ -36,6 +38,7 @@ pub struct HabitPayload {
     pub duration: Option<String>,
     pub group: Option<String>,
     pub reminder: Option<String>,
+    pub check_in_time: Option<String>,
     pub auto_popup_log: Option<bool>,
 }
 
@@ -86,6 +89,7 @@ pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> Result<HabitData, St
             let auto_popup_log_i32: i32 = row.try_get("auto_popup_log").unwrap_or(0);
             let created_at: String = row.try_get("created_at").unwrap_or_default();
             let updated_at: String = row.try_get("updated_at").unwrap_or_default();
+            let check_in_time = reminder.clone();
             Habit {
                 id,
                 name,
@@ -94,7 +98,8 @@ pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> Result<HabitData, St
                 start_date,
                 duration,
                 group,
-                reminder,
+                reminder: reminder.clone(),
+                check_in_time,
                 auto_popup_log: auto_popup_log_i32 != 0,
                 created_at,
                 updated_at,
@@ -142,6 +147,9 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
     let name_val = payload.name.unwrap_or_default();
+    let reminder_val = payload.check_in_time.clone().or(payload.reminder.clone());
+    let today_local = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let start_date_val = payload.start_date.filter(|s| !s.trim().is_empty()).unwrap_or(today_local);
 
     sqlx::query(
         r#"
@@ -153,10 +161,10 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
     .bind(&name_val)
     .bind(&payload.frequency)
     .bind(&payload.goal)
-    .bind(&payload.start_date)
+    .bind(&start_date_val)
     .bind(&payload.duration)
     .bind(&payload.group)
-    .bind(&payload.reminder)
+    .bind(&reminder_val)
     .bind(auto_popup_log_val)
     .bind(&now)
     .bind(&now)
@@ -169,10 +177,11 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
         name: name_val,
         frequency: payload.frequency,
         goal: payload.goal,
-        start_date: payload.start_date,
+        start_date: Some(start_date_val),
         duration: payload.duration,
         group: payload.group,
-        reminder: payload.reminder,
+        reminder: reminder_val.clone(),
+        check_in_time: reminder_val,
         auto_popup_log: auto_popup_log_val != 0,
         created_at: now.clone(),
         updated_at: now,
@@ -183,6 +192,7 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
 pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, SqlitePool>) -> Result<(), String> {
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
+    let reminder_val = payload.check_in_time.or(payload.reminder);
 
     sqlx::query(
         r#"
@@ -193,7 +203,7 @@ pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, Sql
             start_date = ?, 
             duration = ?, 
             category = ?, 
-            reminder = ?, 
+            reminder = COALESCE(?, reminder), 
             auto_popup_log = ?, 
             updated_at = ? 
         WHERE id = ?
@@ -205,7 +215,7 @@ pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, Sql
     .bind(&payload.start_date)
     .bind(&payload.duration)
     .bind(&payload.group)
-    .bind(&payload.reminder)
+    .bind(&reminder_val)
     .bind(auto_popup_log_val)
     .bind(&now)
     .bind(id)
@@ -241,12 +251,19 @@ pub async fn habit_delete(
         .execute(&*pool)
         .await;
 
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        let _ = sqlx::query("DELETE FROM habit_checkins WHERE habit_id = ?").bind(&id).execute(mysql).await;
-        if let Ok(_) = sqlx::query("DELETE FROM habits WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'habits' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
+    let pool_clone = pool.inner().clone();
+    let tidb_state_clone = tidb_state.inner().clone();
+    let id_clone = id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let guard = tidb_state_clone.0.read().await;
+        if let Some(ref mysql) = *guard {
+            let _ = sqlx::query("DELETE FROM habit_checkins WHERE habit_id = ?").bind(&id_clone).execute(mysql).await;
+            if let Ok(_) = sqlx::query("DELETE FROM habits WHERE id = ?").bind(&id_clone).execute(mysql).await {
+                let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'habits' AND record_id = ? AND action = 'DELETE'").bind(&id_clone).execute(&pool_clone).await;
+            }
         }
-    }
+    });
 
     Ok(())
 }
@@ -293,22 +310,32 @@ pub async fn habit_toggle_checkin(
     let created_at: String = row.try_get("created_at").unwrap_or_default();
     let updated_at: String = row.try_get("updated_at").unwrap_or_default();
 
-    // 3. Sync to TiDB if connected
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        let _ = sqlx::query(
-            "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE completed = VALUES(completed), updated_at = VALUES(updated_at)"
-        )
-        .bind(&final_id)
-        .bind(&habit_id)
-        .bind(&date)
-        .bind(final_completed as i8)
-        .bind(&created_at)
-        .bind(&updated_at)
-        .execute(mysql)
-        .await;
-    }
+    // 3. Sync to TiDB asynchronously in background
+    let tidb_state_clone = tidb_state.inner().clone();
+    let final_id_clone = final_id.clone();
+    let habit_id_clone = habit_id.clone();
+    let date_clone = date.clone();
+    let created_at_clone = created_at.clone();
+    let updated_at_clone = updated_at.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let guard = tidb_state_clone.0.read().await;
+        if let Some(ref mysql) = *guard {
+            let _ = sqlx::query(
+                "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE completed = VALUES(completed), updated_at = VALUES(updated_at)"
+            )
+            .bind(&final_id_clone)
+            .bind(&habit_id_clone)
+            .bind(&date_clone)
+            .bind(final_completed as i8)
+            .bind(&created_at_clone)
+            .bind(&updated_at_clone)
+            .execute(mysql)
+            .await;
+        }
+    });
 
     Ok(HabitCheckIn {
         id: final_id,
