@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus, GripVertical, User, X, MoreHorizontal,
@@ -17,6 +17,23 @@ import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import './timeManagement.css';
 
 // ==========================================
+// 0. Shared Helpers & Custom Hooks
+// ==========================================
+function useClickOutside<T extends HTMLElement>(handler: () => void) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    const listener = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        handler();
+      }
+    };
+    document.addEventListener('mousedown', listener);
+    return () => document.removeEventListener('mousedown', listener);
+  }, [handler]);
+  return ref;
+}
+
+// ==========================================
 // 1. CollapsibleGroup Component
 // ==========================================
 interface CollapsibleGroupProps {
@@ -27,7 +44,13 @@ interface CollapsibleGroupProps {
   titleColor?: string;
 }
 
-export function CollapsibleGroup({ title, count, children, defaultExpanded = true, titleColor }: CollapsibleGroupProps) {
+export const CollapsibleGroup: React.FC<CollapsibleGroupProps> = memo(({
+  title,
+  count,
+  children,
+  defaultExpanded = true,
+  titleColor,
+}) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   if (count === 0) return null;
@@ -57,7 +80,7 @@ export function CollapsibleGroup({ title, count, children, defaultExpanded = tru
       )}
     </div>
   );
-}
+});
 
 // ==========================================
 // 2. QuickAddPopover Component
@@ -69,21 +92,13 @@ interface QuickAddPopoverProps {
   triggerRef: React.RefObject<any>;
 }
 
-export function QuickAddPopover({ quadrant, onAdd, onClose, triggerRef }: QuickAddPopoverProps) {
+export const QuickAddPopover: React.FC<QuickAddPopoverProps> = memo(({ quadrant, onAdd, onClose, triggerRef }) => {
   const [title, setTitle] = useState('');
   const [deadline, setDeadline] = useState<string>('');
-  
-  const popoverRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node) && triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose, triggerRef]);
+  const popoverRef = useClickOutside<HTMLDivElement>(() => {
+    onClose();
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,7 +111,7 @@ export function QuickAddPopover({ quadrant, onAdd, onClose, triggerRef }: QuickA
   };
 
   const top = triggerRef.current ? triggerRef.current.getBoundingClientRect().bottom + 8 : 0;
-  const left = triggerRef.current ? triggerRef.current.getBoundingClientRect().right - 280 : 0; 
+  const left = triggerRef.current ? triggerRef.current.getBoundingClientRect().right - 280 : 0;
 
   return (
     <div 
@@ -152,7 +167,7 @@ export function QuickAddPopover({ quadrant, onAdd, onClose, triggerRef }: QuickA
       </form>
     </div>
   );
-}
+});
 
 // ==========================================
 // 3. DateTimePicker Component
@@ -162,24 +177,12 @@ interface DateTimePickerProps {
   onChange: (value?: number) => void;
 }
 
-export function DateTimePicker({ value, onChange }: DateTimePickerProps) {
+export const DateTimePicker: React.FC<DateTimePickerProps> = memo(({ value, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useClickOutside<HTMLDivElement>(() => setIsOpen(false));
 
   const selectedDate = value ? new Date(value) : undefined;
   const timeStr = value ? dayjs(selectedDate).format('HH:mm') : '12:00';
-
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    if (isOpen) {
-      document.addEventListener('mousedown', handleOutsideClick);
-    }
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [isOpen]);
 
   const handleDateSelect = (date: Date | undefined) => {
     if (!date) {
@@ -309,7 +312,7 @@ export function DateTimePicker({ value, onChange }: DateTimePickerProps) {
       )}
     </div>
   );
-}
+});
 
 // ==========================================
 // 4. TaskDetailModal Component
@@ -337,7 +340,7 @@ const checkJsonEmpty = (val?: string): boolean => {
   }
 };
 
-export function TaskDetailModal({ task, onClose, onSave }: TaskDetailModalProps) {
+export const TaskDetailModal: React.FC<TaskDetailModalProps> = memo(({ task, onClose, onSave }) => {
   const [title, setTitle] = useState(task.title);
   const [deadline, setDeadline] = useState<number | undefined>(task.deadline);
 
@@ -532,7 +535,7 @@ export function TaskDetailModal({ task, onClose, onSave }: TaskDetailModalProps)
     </div>,
     document.body
   );
-}
+});
 
 // ==========================================
 // 5. DailyQuadrants Component
@@ -593,7 +596,15 @@ function getDefaultDeadlineForGroup(groupName: string, now: number): number | un
   return undefined;
 }
 
-export function DailyQuadrants({ tasks, onToggleComplete, onAddTask, hideCompleted, onDeleteTask, onEditTask, onUpdateTask }: DailyQuadrantsProps) {
+export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
+  tasks,
+  onToggleComplete,
+  onAddTask,
+  hideCompleted,
+  onDeleteTask,
+  onEditTask,
+  onUpdateTask,
+}) => {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [activePopover, setActivePopover] = useState<QuadrantType | null>(null);
   const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
@@ -960,7 +971,7 @@ export function DailyQuadrants({ tasks, onToggleComplete, onAddTask, hideComplet
       {renderQuadrant('Q4')}
     </div>
   );
-}
+});
 
 // ==========================================
 // 6. TimeManagementPanel Main Component
@@ -972,15 +983,13 @@ interface TimeManagementPanelProps {
 export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProps) {
   const activeTab = mode;
 
-  const roles = useTimeStore(state => state.data.roles);
-  const tasks = useTimeStore(state => state.data.tasks);
+  const roles = useTimeStore(s => s.data.roles);
+  const tasks = useTimeStore(s => s.data.tasks);
 
-  const {
-    syncAllFromDB,
-    updateTask,
-    addTask,
-    deleteTask
-  } = useTimeStore();
+  const syncAllFromDB = useTimeStore(s => s.syncAllFromDB);
+  const updateTask = useTimeStore(s => s.updateTask);
+  const addTask = useTimeStore(s => s.addTask);
+  const deleteTask = useTimeStore(s => s.deleteTask);
 
   const hideCompletedStr = usePreferencesStore(state => state.getPreference('tm-hide-completed', 'false'));
   const hideCompleted = hideCompletedStr === 'true';
@@ -988,10 +997,10 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const setHideCompleted = (val: boolean) => setPreference('tm-hide-completed', String(val));
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-
   const [draftTasks, setDraftTasks] = useState<Record<string, string>>({});
   const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+
+  const menuRef = useClickOutside<HTMLDivElement>(() => setMenuOpen(false));
 
   useEffect(() => {
     useMissionStore.getState().init();
@@ -999,35 +1008,16 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   }, [syncAllFromDB]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
     if (tasks.length === 0) return;
 
     const todayStr = new Date().toISOString().split('T')[0];
-    let hasUpdates = false;
+    const toUpdate = tasks.filter(
+      t => t.scheduledDate === todayStr && !t.completed && t.quadrant !== 'Q2' && t.quadrant !== 'Q1'
+    );
 
-    const updatedTasks = tasks.map(task => {
-      if (task.scheduledDate === todayStr && !task.completed && task.quadrant !== 'Q2' && task.quadrant !== 'Q1') {
-        hasUpdates = true;
-        return { ...task, quadrant: 'Q2' as QuadrantType };
-      }
-      return task;
-    });
-
-    if (hasUpdates) {
-      tasks.forEach((oldTask, i) => {
-        const newTask = updatedTasks[i];
-        if (oldTask.quadrant !== newTask.quadrant) {
-          updateTask(oldTask.id, { quadrant: newTask.quadrant }, false);
-        }
+    if (toUpdate.length > 0) {
+      toUpdate.forEach(t => {
+        updateTask(t.id, { quadrant: 'Q2' }, false);
       });
     }
   }, [tasks, updateTask]);
@@ -1084,7 +1074,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     e.dataTransfer.setData('application/tm-task-id', taskId);
   };
 
-  const backlogTasks = tasks.filter(t => !t.scheduledDate && !t.completed);
+  const backlogTasks = useMemo(() => tasks.filter(t => !t.scheduledDate && !t.completed), [tasks]);
 
   return (
     <section className="time-management-page">
