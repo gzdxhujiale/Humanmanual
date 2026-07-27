@@ -1,6 +1,6 @@
 [package]
 name = "humanmanual"
-version = "1.0.8"
+version = "1.0.9"
 description = "人类使用手册"
 authors = ["you"]
 edition = "2021"
