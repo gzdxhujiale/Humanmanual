@@ -17,7 +17,11 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // 桌面专属插件：移动端无多实例/窗口状态/更新器/进程重启/开机自启概念，编译期排除
+    #[cfg(desktop)]
+    let builder = builder
         // single-instance 必须第一个注册：重复启动时聚焦已有主窗口，避免两套实例写同一个 SQLite
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -26,17 +30,26 @@ pub fn run() {
                 let _ = win.set_focus();
             }
         }))
-        .plugin(tauri_plugin_opener::init())
         // 只记忆主窗口状态；快捷编辑/便签/词典等子窗口位置由前端实时计算，不得被旧状态覆盖
         .plugin(tauri_plugin_window_state::Builder::default().with_filter(|label| label == "main").build())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, None))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, None));
+
+    builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
+            // 平台无关的应用数据目录：移动端 mysql.config.json 读写与词典库拷贝都落在这里
+            if let Ok(dir) = app.path().app_data_dir() {
+                db::set_app_config_dir(dir);
+            }
+
             // Establish local SQLite connection (offline-first primary storage)
+            let handle = app.handle().clone();
             let sqlite_pool = tauri::async_runtime::block_on(async {
-                let pool = local_db::establish_local_connection()
+                let pool = local_db::establish_local_connection(&handle)
                     .await
                     .expect("Failed to connect to local SQLite database");
                 schema::ensure_local_tables(&pool)

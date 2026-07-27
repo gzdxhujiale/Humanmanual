@@ -69,22 +69,47 @@ impl DictState {
 
 /// Resolve the dictionary database path, preferring the bundled resource and
 /// falling back to `src-tauri/resources/ecdict.db` during `tauri dev`.
+///
+/// Android 上 Resource 目录位于 APK assets，SQLite 无法直接以文件方式打开；
+/// 首启时尝试将词库拷贝到应用数据目录，拷贝失败则词典功能降级不可用。
 pub fn resolve_dict_path(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(p) = app
-        .path()
-        .resolve("resources/ecdict.db", tauri::path::BaseDirectory::Resource)
+    #[cfg(target_os = "android")]
     {
-        if p.exists() {
-            return Some(p);
+        let data_dir = app.path().app_data_dir().ok()?;
+        let target = data_dir.join("ecdict.db");
+        if target.exists() {
+            return Some(target);
         }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        let dev = cwd.join("resources").join("ecdict.db");
-        if dev.exists() {
-            return Some(dev);
+        if let Ok(src) = app
+            .path()
+            .resolve("resources/ecdict.db", tauri::path::BaseDirectory::Resource)
+        {
+            let _ = std::fs::create_dir_all(&data_dir);
+            if std::fs::copy(&src, &target).is_ok() {
+                return Some(target);
+            }
         }
+        return None;
     }
-    None
+
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Ok(p) = app
+            .path()
+            .resolve("resources/ecdict.db", tauri::path::BaseDirectory::Resource)
+        {
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let dev = cwd.join("resources").join("ecdict.db");
+            if dev.exists() {
+                return Some(dev);
+            }
+        }
+        None
+    }
 }
 
 async fn query_word(pool: &SqlitePool, word: &str) -> AppResult<Option<DictEntry>> {

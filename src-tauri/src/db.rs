@@ -3,12 +3,21 @@ use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
 use crate::error::AppResult;
 
 #[derive(Clone, Default)]
 pub struct TidbState(pub Arc<RwLock<Option<MySqlPool>>>);
+
+/// 平台无关的应用数据目录（setup 时由 lib.rs 注入）：
+/// 移动端没有 APPDATA/ProgramData，mysql.config.json 的读写都落在这里。
+static APP_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_app_config_dir(dir: PathBuf) {
+    let _ = APP_CONFIG_DIR.set(dir);
+}
 
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
@@ -22,16 +31,24 @@ pub struct MysqlConfigJson {
     pub skip_schema_creation: Option<bool>,
 }
 
+#[cfg(desktop)]
 fn get_program_data_path() -> PathBuf {
     PathBuf::from(std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_string()))
 }
 
+#[cfg(desktop)]
 fn get_app_data_path() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string()))
 }
 
 fn read_config() -> MysqlConfigJson {
-    let paths = vec![
+    let mut paths: Vec<PathBuf> = Vec::new();
+    // Tauri 应用数据目录（移动端唯一候选，桌面作为额外候选）
+    if let Some(dir) = APP_CONFIG_DIR.get() {
+        paths.push(dir.join("mysql.config.json"));
+    }
+    #[cfg(desktop)]
+    paths.extend(vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mysql.config.json"),
         std::env::current_dir()
             .unwrap_or_default()
@@ -54,7 +71,7 @@ fn read_config() -> MysqlConfigJson {
         get_app_data_path()
             .join("AIstudy")
             .join("mysql.config.json"),
-    ];
+    ]);
 
     for path in paths {
         if path.exists() {
@@ -134,8 +151,15 @@ pub async fn establish_connection() -> Result<MySqlPool, sqlx::Error> {
 }
 
 fn get_config_write_path() -> PathBuf {
-    let mut path = get_app_data_path();
-    path.push("AIstudy");
+    // 桌面保持写入 APPDATA\AIstudy 老位置；移动端写入应用数据目录
+    #[cfg(desktop)]
+    let mut path = {
+        let mut p = get_app_data_path();
+        p.push("AIstudy");
+        p
+    };
+    #[cfg(mobile)]
+    let mut path = APP_CONFIG_DIR.get().cloned().unwrap_or_default();
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
     }

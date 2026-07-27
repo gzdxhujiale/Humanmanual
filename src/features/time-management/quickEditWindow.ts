@@ -3,12 +3,16 @@ import { getCurrentWindow, currentMonitor, PhysicalPosition } from '@tauri-apps/
 import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Task, QuadrantType } from './timeManagementTypes';
 import type { TaskDraft } from './TaskQuickEdit';
+import { isMobilePlatform } from '../../lib/platform';
+import { useQuickEditOverlayStore, closeQuickEditOverlayTopLayer } from './quickEditOverlayStore';
 
 // ==========================================
 // quickEditWindow — 主窗口侧控制器（窗口池版）
 // 任务快捷编辑浮层承载在常驻的透明置顶子窗口中：
 // 应用空闲时预热创建一次，之后打开=定位+init+show，
 // 关闭=hide 复用，免去每次建窗/加载 bundle 的数百毫秒。
+// 移动端接缝：无子窗口能力，同名 API 改走 DOM 浮层
+// （quickEditOverlayStore + QuickEditOverlayHost），调用方无需感知。
 // 事件协议（负载带自增 session 防旧会话串话）：
 //   popup → main: tqe:ready / tqe:shown / tqe:save / tqe:create / tqe:closed
 //   main → popup: tqe:init / tqe:close-layer / tqe:close-all / tqe:ping
@@ -191,17 +195,36 @@ function discardPool(): void {
 
 /** 应用启动空闲时调用：提前付掉建窗与页面加载成本，首次打开即秒显 */
 export function prewarmQuickEditWindow(): void {
+  if (isMobilePlatform()) return; // 移动端无窗口池，浮层组件随主窗口 bundle 已就绪
   void ensurePool().catch(() => {});
 }
 
 /** 主窗口蒙版点击：让子窗口逐层关闭浮层 */
 export function requestQuickEditCloseLayer(): void {
+  if (isMobilePlatform()) {
+    closeQuickEditOverlayTopLayer();
+    return;
+  }
   if (current) {
     void emitTo(POOL_LABEL, 'tqe:close-layer');
   }
 }
 
 export async function openQuickEditWindow(opts: QuickEditWindowOptions): Promise<void> {
+  // 移动端：直接在主窗口 DOM 渲染浮层，锚点坐标即视口坐标
+  if (isMobilePlatform()) {
+    const r = opts.anchorEl.getBoundingClientRect();
+    useQuickEditOverlayStore.getState().open({
+      task: opts.task,
+      quadrant: opts.quadrant,
+      anchorRect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width },
+      onSave: opts.onSave,
+      onCreate: opts.onCreate,
+      onClosed: opts.onClosed,
+    });
+    return;
+  }
+
   // 上一会话仍开着则静默丢弃（不回调其 onClosed：面板已为新会话挂上蒙版，不能被撤掉）
   if (current) current = null;
   const session = ++sessionSeq;

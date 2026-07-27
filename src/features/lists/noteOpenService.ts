@@ -1,11 +1,14 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { usePreferencesStore } from '../settings/preferencesStore';
+import { isMobilePlatform } from '../../lib/platform';
 
 export type NoteOpenMode = 'sidebar' | 'window';
 
 export const NOTE_OPEN_MODE_KEY = 'lists-note-open-mode';
 
 export function getNoteOpenMode(): NoteOpenMode {
+  // 移动端无多窗口能力，无视偏好强制侧边栏模式
+  if (isMobilePlatform()) return 'sidebar';
   const mode = usePreferencesStore.getState().getPreference(NOTE_OPEN_MODE_KEY, 'sidebar');
   return mode === 'window' ? 'window' : 'sidebar';
 }

@@ -5,6 +5,7 @@ import {
   DndContext,
   closestCenter,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -17,6 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ToolConfig } from "./types";
+import { isMobilePlatform } from "../../lib/platform";
 import "./AppLayout.css";
 
 export const MenuBar: React.FC = () => {
@@ -27,6 +29,9 @@ export const MenuBar: React.FC = () => {
   const closeWindow = () => {
     getCurrentWindow().close();
   };
+
+  // 移动端由系统接管窗口生命周期，无需自绘标题栏与窗控按钮
+  if (isMobilePlatform()) return null;
 
   return (
     <div className="custom-menubar" data-tauri-drag-region>
@@ -54,7 +59,7 @@ export const AppLayout: React.FC<{
   mainContent: React.ReactNode;
 }> = ({ menuBar, toolbar, mainContent }) => {
   return (
-    <div className="app-layout">
+    <div className={`app-layout${isMobilePlatform() ? " is-mobile" : ""}`}>
       <div className="app-layout-toolbar">{toolbar}</div>
       <div className="app-layout-body">
         <div className="app-layout-menubar">{menuBar}</div>
@@ -104,7 +109,11 @@ const SortableToolButton: React.FC<{
 
 export const Toolbar: React.FC<ToolbarProps> = ({ tools, activeToolId, onToolSelect, onSettingsClick, onReorder }) => {
   // Require 8px of movement before a drag starts so plain clicks still select tools.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+  // On touch screens require a long-press instead, so swipe-scrolling the tab bar never triggers a drag.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+  );
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;

@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capability for the main webview on mobile (no desktop-only plugins)",
+  "platforms": ["android", "iOS"],
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default",
+    "opener:default",
+    "os:default",
+    "notification:default"
+  ]
+}

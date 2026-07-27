@@ -35,8 +35,8 @@ function saveFired(map: FiredMap): void {
   }
 }
 
-/** 23:59 / 00:00 视为整日截止（与快捷编辑浮层的 deadline 语义一致） */
-function deadlineBody(task: Task, daysLeft: number): string {
+/** 23:59 / 00:00 视为整日截止（与快捷编辑浮层的 deadline 语义一致）；移动端调度器复用同一文案 */
+export function deadlineBody(task: Task, daysLeft: number): string {
   const dl = dayjs(task.deadline);
   const hm = dl.format('HH:mm');
   const wholeDay = hm === '23:59' || hm === '00:00';

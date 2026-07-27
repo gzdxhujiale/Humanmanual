@@ -5,6 +5,8 @@ import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/cre
 import { logError, logSilent } from '../../lib/logger';
 import { requestNotificationPermission, sendDesktopNotification } from '../../lib/notifications';
 import { todayYMD } from '../../lib/dateUtils';
+import { isMobilePlatform } from '../../lib/platform';
+import { setKeepScreenOn } from '../../lib/wakeLock';
 
 // 通知能力已提取到 lib/notifications，保留 re-export 兼容既有导入
 export { requestNotificationPermission, sendDesktopNotification };
@@ -130,6 +132,8 @@ const stopGlobalTimer = () => {
     clearInterval(globalTimerInterval);
     globalTimerInterval = null;
   }
+  // 移动端：计时停止即释放屏幕常亮锁（桌面端 no-op）
+  if (isMobilePlatform()) void setKeepScreenOn(false);
 };
 
 const startGlobalTimer = () => {
@@ -137,6 +141,8 @@ const startGlobalTimer = () => {
   globalTimerInterval = setInterval(() => {
     usePomodoroStore.getState().tick();
   }, 500);
+  // 移动端：专注/休息计时期间防止手机熄屏
+  if (isMobilePlatform()) void setKeepScreenOn(true);
 };
 
 export const usePomodoroStore = create<PomodoroState>((set, get) => ({

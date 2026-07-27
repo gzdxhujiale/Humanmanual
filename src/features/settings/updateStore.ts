@@ -3,6 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { usePreferencesStore } from './preferencesStore';
 import { logError, logSilent, logWarn } from '../../lib/logger';
+import { isMobilePlatform } from '../../lib/platform';
 
 export type Update = any;
 
@@ -278,7 +279,11 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         }
       } else {
         // Fallback when latest.json manifest is not present: open browser for actual asset download
-        const asset = latestRelease?.assets?.find(a => a.name.endsWith('.msi') || a.name.endsWith('.exe') || a.name.endsWith('.setup.exe')) || latestRelease?.assets[0];
+        // 移动端无 updater 插件，优先匹配 .apk 资产
+        const asset = latestRelease?.assets?.find(a => isMobilePlatform()
+          ? a.name.endsWith('.apk')
+          : (a.name.endsWith('.msi') || a.name.endsWith('.exe') || a.name.endsWith('.setup.exe'))
+        ) || latestRelease?.assets[0];
         const downloadUrl = asset?.downloadUrl || latestRelease?.htmlUrl || `https://github.com/${get().githubRepo}/releases`;
 
         try {

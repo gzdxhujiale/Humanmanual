@@ -2,11 +2,25 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::MySqlPool;
 use std::path::PathBuf;
 
-/// Get the local database file path under the user's AppData directory.
-fn get_local_db_path() -> PathBuf {
-    let app_data = std::env::var("APPDATA")
-        .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string());
-    let dir = PathBuf::from(app_data).join("AIstudy").join("data");
+/// Get the local database file path.
+/// 桌面（Windows）沿用 APPDATA\AIstudy\data 老路径，保证存量用户数据不迁移；
+/// 移动端（Android/iOS）没有 APPDATA，统一落在 Tauri app_data_dir 下。
+fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
+    #[cfg(desktop)]
+    let dir = {
+        let _ = app;
+        let app_data = std::env::var("APPDATA")
+            .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string());
+        PathBuf::from(app_data).join("AIstudy").join("data")
+    };
+    #[cfg(mobile)]
+    let dir = {
+        use tauri::Manager;
+        app.path()
+            .app_data_dir()
+            .expect("app data dir unavailable")
+            .join("data")
+    };
     if !dir.exists() {
         let _ = std::fs::create_dir_all(&dir);
     }
@@ -15,8 +29,8 @@ fn get_local_db_path() -> PathBuf {
 
 /// Establish a connection pool to the local SQLite database.
 /// Creates the database file and parent directories if they don't exist.
-pub async fn establish_local_connection() -> Result<SqlitePool, sqlx::Error> {
-    let db_path = get_local_db_path();
+pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<SqlitePool, sqlx::Error> {
+    let db_path = get_local_db_path(app);
     let options = SqliteConnectOptions::new()
         .filename(&db_path)
         .create_if_missing(true)

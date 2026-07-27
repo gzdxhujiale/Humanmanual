@@ -149,3 +149,48 @@
 .settings-btn {
   margin-top: auto;
 }
+
+/* ===== 移动端布局：左侧工具栏变底部 TabBar，隐藏自绘菜单栏 ===== */
+.app-layout.is-mobile {
+  flex-direction: column-reverse;
+}
+
+.app-layout.is-mobile .app-layout-toolbar {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+}
+
+.app-layout.is-mobile .app-layout-menubar {
+  display: none; /* MenuBar 组件移动端返回 null，占位容器一并隐藏 */
+}
+
+.app-layout.is-mobile .custom-toolbar {
+  flex-direction: row;
+  align-items: center;
+  height: auto;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  border-right: none;
+  border-top: 1px solid var(--line-soft);
+}
+
+.app-layout.is-mobile .toolbar-nav {
+  flex-direction: row;
+  flex: 1 1 auto;
+  width: auto;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.app-layout.is-mobile .toolbar-btn {
+  width: 44px;
+  height: 40px;
+  margin: 0;
+}
+
+.app-layout.is-mobile .settings-btn {
+  margin-top: 0;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
