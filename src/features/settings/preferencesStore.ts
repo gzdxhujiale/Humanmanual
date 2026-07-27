@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { callSilent } from '../../lib/tauriClient';
+import { logError } from '../../lib/logger';
 
 interface PreferencesState {
   preferences: Record<string, string>;
@@ -26,11 +27,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
       }
     }));
     localStorage.setItem(key, value);
-    try {
-      await invoke('db_set_preference', { key, value });
-    } catch (e) {
-      console.error(`Failed to save preference ${key} to DB:`, e);
-    }
+    // Backend write is best-effort: localStorage already holds the value.
+    await callSilent('db_set_preference', { key, value }, undefined);
   },
 
   init: async () => {
@@ -40,14 +38,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
       const loadedPrefs: Record<string, string> = {};
       
       for (const key of keysToLoad) {
-        try {
-          const val = await invoke<string | null>('db_get_preference', { key });
-          if (val !== null) {
-            loadedPrefs[key] = val;
-            localStorage.setItem(key, val);
-          }
-        } catch (e) {
-          console.error(`Failed to load preference ${key} from DB:`, e);
+        const val = await callSilent<string | null>('db_get_preference', { key }, null);
+        if (val !== null) {
+          loadedPrefs[key] = val;
+          localStorage.setItem(key, val);
         }
       }
 
@@ -59,7 +53,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         initialized: true
       }));
     } catch (e) {
-      console.error('Failed to initialize preferences:', e);
+      logError('preferencesStore', 'failed to initialize preferences', e);
       set({ initialized: true });
     }
   }

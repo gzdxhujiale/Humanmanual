@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool, Row};
 use tauri::State;
 
+use crate::db::TidbState;
+use crate::error::AppResult;
+use crate::sync::{now_iso, now_ms, queue_and_sync_delete};
+
 #[derive(Serialize, Deserialize, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyReviewRow {
@@ -14,13 +18,12 @@ pub struct DailyReviewRow {
 }
 
 #[tauri::command]
-pub async fn daily_review_load_all(pool: State<'_, SqlitePool>) -> Result<Vec<DailyReviewRow>, String> {
+pub async fn daily_review_load_all(pool: State<'_, SqlitePool>) -> AppResult<Vec<DailyReviewRow>> {
     let rows = sqlx::query(
         "SELECT id, date, content, rating, created_at, updated_at FROM daily_reviews"
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(rows
         .into_iter()
@@ -56,19 +59,14 @@ pub async fn daily_review_load_all(pool: State<'_, SqlitePool>) -> Result<Vec<Da
 }
 
 #[tauri::command]
-pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePool>) -> Result<(), String> {
-    let created_at_value = review.created_at.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
-    });
+pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePool>) -> AppResult<()> {
+    let created_at_value = review.created_at.unwrap_or_else(now_ms);
 
     // Convert ms timestamp to ISO string for SQLite storage
     let created_iso = chrono::DateTime::from_timestamp_millis(created_at_value)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
-        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string());
-    let now_iso = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        .unwrap_or_else(now_iso);
+    let now = now_iso();
 
     sqlx::query(
         "INSERT INTO daily_reviews (id, date, content, rating, created_at, updated_at)
@@ -83,38 +81,25 @@ pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePoo
     .bind(&review.content)
     .bind(review.rating)
     .bind(&created_iso)
-    .bind(&now_iso)
+    .bind(&now)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(())
 }
-
-use crate::db::TidbState;
 
 #[tauri::command]
 pub async fn daily_review_delete(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM daily_reviews WHERE id = ?")
         .bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('daily_reviews', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        if let Ok(_) = sqlx::query("DELETE FROM daily_reviews WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'daily_reviews' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
-    }
+    queue_and_sync_delete(&pool, &tidb_state, "daily_reviews", &id).await;
 
     Ok(())
 }

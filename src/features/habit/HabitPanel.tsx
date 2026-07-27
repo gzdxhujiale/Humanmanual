@@ -23,6 +23,8 @@ import { Habit, HabitStats } from './habitTypes';
 import { useHabitStore } from './habitStore';
 import { useConfirmDialog } from '../../components/ui/ConfirmDeleteDialog';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import { formatDateYMD as formatDateStr } from '../../lib/dateUtils';
+import { logError, logWarn } from '../../lib/logger';
 
 // ============================================================
 // Notification Helper
@@ -36,7 +38,7 @@ export const requestNotificationPermission = async () => {
       granted = permission === 'granted';
     }
   } catch (e) {
-    console.warn('Tauri notification permission check failed:', e);
+    logWarn('habitPanel', 'Tauri notification permission check failed', e);
   }
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
     await Notification.requestPermission();
@@ -55,13 +57,13 @@ export const sendDesktopNotification = async (title: string, body: string) => {
       return;
     }
   } catch (e) {
-    console.warn('Tauri notification plugin failed, trying Web Notification fallback:', e);
+    logWarn('habitPanel', 'Tauri notification plugin failed, trying Web Notification fallback', e);
   }
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
     try {
       new Notification(title, { body });
     } catch (e) {
-      console.error('Web Notification failed:', e);
+      logError('habitPanel', 'Web Notification failed', e);
     }
   }
 };
@@ -69,14 +71,6 @@ export const sendDesktopNotification = async (title: string, body: string) => {
 // ============================================================
 // Shared Helpers & Constants
 // ============================================================
-
-/** Format a Date object to 'YYYY-MM-DD' string */
-const formatDateStr = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-};
 
 /** Format a Date object to 'HH:MM:SS' string */
 const formatTimeStr = (d: Date): string =>
@@ -651,7 +645,7 @@ const HabitSidebar: React.FC<HabitSidebarProps> = ({ habit, onClose }) => {
         await deleteHabit(habit.id);
         onClose();
       } catch (err) {
-        console.error('Delete habit error:', err);
+        logError('habitPanel', 'failed to delete habit', err);
       }
     }
   };

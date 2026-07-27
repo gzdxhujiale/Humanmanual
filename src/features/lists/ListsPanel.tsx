@@ -8,13 +8,13 @@ import {
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverEvent, useDroppable } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { invoke } from '@tauri-apps/api/core';
 
 import { useListsStore } from './listsStore';
 import { List, Folder, ViewType, Note, Template } from './listsTypes';
 import { getNoteOpenMode, setNoteOpenMode, openNoteInNewWindow, NoteOpenMode } from './noteOpenService';
 import { TemplateModal, useTemplateStore } from '../templates';
 import * as listsService from './listsService';
+import { logError, logSilent } from '../../lib/logger';
 import { computeNoteReorder, computeListReorder } from './listsReorder';
 import { ReactjsTiptapEditor, convertMarkdownToTipTapJson, convertTipTapJsonToMarkdown } from '../reactjs-tiptap-v1';
 import { useConfirmDialog } from '../../components/ui/ConfirmDeleteDialog';
@@ -155,7 +155,9 @@ const SidebarListItemDroppable: React.FC<SidebarListItemDroppableProps> = memo((
               moveNoteToList(parsed.noteId, list.id);
             }
           }
-        } catch (err) {}
+        } catch (err) {
+          logSilent('listsPanel', 'invalid note drag payload', err);
+        }
       }}
     >
       {children}
@@ -733,28 +735,21 @@ function NoteDrawerContent({
   }, [title, content, note.id, note.title, note.content, isOpen, onUpdate]);
 
   const handleImport = async () => {
-    try {
-      const mdContent = await invoke<string>('pick_markdown_file');
-      if (mdContent) {
-        const jsonStr = convertMarkdownToTipTapJson(mdContent);
-        setContent(jsonStr);
-        if (showToast) showToast('导入成功！');
-      }
-    } catch (err) {
-      console.warn('Import cancelled or failed:', err);
+    const mdContent = await listsService.pickMarkdownFile();
+    if (mdContent) {
+      const jsonStr = convertMarkdownToTipTapJson(mdContent);
+      setContent(jsonStr);
+      if (showToast) showToast('导入成功！');
     }
   };
 
   const handleExport = async () => {
     try {
       const exportText = convertTipTapJsonToMarkdown(content);
-      await invoke('save_markdown_file', {
-        defaultName: `${title || '未命名笔记'}.md`,
-        content: exportText,
-      });
+      await listsService.saveMarkdownFile(`${title || '未命名笔记'}.md`, exportText);
       if (showToast) showToast('导出成功！');
     } catch (err) {
-      console.warn('Export cancelled or failed:', err);
+      // Cancellation surfaces as an error from the backend; already logged by `call`.
     }
   };
 
@@ -1105,7 +1100,7 @@ function ListSettingsModal({ onClose, showToast }: ListSettingsModalProps) {
         showToast(`已成功将笔记弹出方式切换为：${mode === 'sidebar' ? '侧边栏弹出' : '新窗口弹出'}`);
       }
     } catch (e) {
-      console.error('Failed to save note open mode preference:', e);
+      logError('listsPanel', 'failed to save note open mode preference', e);
       if (showToast) {
         showToast('保存配置失败', 'error');
       }
@@ -1747,7 +1742,7 @@ export function ListsPanel() {
       }
       showToast(`已成功导入 ${importedFiles.length} 条笔记！`);
     } catch (err) {
-      console.warn('Batch import cancelled or failed:', err);
+      logSilent('listsPanel', 'batch import cancelled or failed', err);
     }
   };
 
@@ -1765,7 +1760,7 @@ export function ListsPanel() {
       setBatchExportModalOpen(false);
       showToast(`已成功导出 ${files.length} 条笔记！`);
     } catch (err) {
-      console.warn('Batch export cancelled or failed:', err);
+      logSilent('listsPanel', 'batch export cancelled or failed', err);
     }
   };
 

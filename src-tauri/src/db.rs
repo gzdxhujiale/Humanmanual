@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::error::AppResult;
+
 #[derive(Clone, Default)]
 pub struct TidbState(pub Arc<RwLock<Option<MySqlPool>>>);
 
@@ -142,33 +144,27 @@ fn get_config_write_path() -> PathBuf {
 }
 
 #[tauri::command]
-pub async fn db_get_config() -> Result<MysqlConfigJson, String> {
+pub async fn db_get_config() -> AppResult<MysqlConfigJson> {
     Ok(read_config())
 }
 
 #[tauri::command]
-pub async fn db_save_config(config: MysqlConfigJson) -> Result<(), String> {
+pub async fn db_save_config(config: MysqlConfigJson) -> AppResult<()> {
     let path = get_config_write_path();
-    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| e.to_string())?;
+    let content = serde_json::to_string_pretty(&config)?;
+    fs::write(path, content)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn db_get_preference(key: String, pool: tauri::State<'_, sqlx::SqlitePool>) -> Result<Option<String>, String> {
+pub async fn db_get_preference(key: String, pool: tauri::State<'_, sqlx::SqlitePool>) -> AppResult<Option<String>> {
     use sqlx::Row;
     let row = sqlx::query("SELECT pref_value FROM app_preferences WHERE pref_key = ?")
         .bind(key)
         .fetch_optional(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    if let Some(r) = row {
-        let val: String = r.try_get("pref_value").unwrap_or_default();
-        Ok(Some(val))
-    } else {
-        Ok(None)
-    }
+    Ok(row.map(|r| r.try_get("pref_value").unwrap_or_default()))
 }
 
 #[tauri::command]
@@ -177,15 +173,14 @@ pub async fn db_set_preference(
     value: String,
     pool: tauri::State<'_, sqlx::SqlitePool>,
     tidb_state: tauri::State<'_, TidbState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO app_preferences (pref_key, pref_value) VALUES (?, ?) ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value"
     )
     .bind(&key)
     .bind(&value)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     if let Some(ref mysql) = *tidb_state.inner().0.read().await {
         let _ = sqlx::query(

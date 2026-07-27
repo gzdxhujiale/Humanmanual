@@ -54,7 +54,7 @@ export default defineConfig(function () { return __awaiter(void 0, void 0, void 
                     dedupe: ['yjs', '@tiptap/pm', 'prosemirror-state', 'prosemirror-model', 'prosemirror-view'],
                     alias: [
                         { find: "@", replacement: path.resolve(__dirname, "src") },
-                        { find: /^quill\/(.*)/, replacement: path.resolve(__dirname, "src/$1") },
+                        // reactjs-tiptap-editor pulls in quill; stub it out since we never render Quill.
                         { find: "quill", replacement: path.resolve(__dirname, "scripts/npm-stubs/quill/index.js") }
                     ]
                 },

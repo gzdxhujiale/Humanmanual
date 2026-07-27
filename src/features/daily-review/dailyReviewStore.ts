@@ -1,22 +1,15 @@
 import { create } from 'zustand';
 import { DailyReview, DailyReviewData, CompoundStats } from './dailyReviewTypes';
 import { dailyReviewApi } from './dailyReviewService';
-import { createSyncEngine } from '../../lib/createSyncEngine';
+import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/createSyncEngine';
+import { logError } from '../../lib/logger';
+import { daysBetween, formatDateYMD, todayYMD } from '../../lib/dateUtils';
 
 
 
 const defaultData: DailyReviewData = {
   reviews: []
 };
-
-function getDaysDifference(date1: string, date2: string): number {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  d1.setHours(0, 0, 0, 0);
-  d2.setHours(0, 0, 0, 0);
-  const diffTime = Math.abs(d2.getTime() - d1.getTime());
-  return Math.floor(diffTime / (1000 * 60 * 60 * 24));
-}
 
 function isReviewEmpty(content: string): boolean {
   if (!content) return true;
@@ -61,7 +54,7 @@ export const useDailyReviewStore = create<DailyReviewStore>((set, get) => ({
       const dbReviews = await dailyReviewApi.loadAll();
       set({ data: { reviews: dbReviews } });
     } catch (e) {
-      console.error('Daily review load from SQLite failed:', e);
+      logError('dailyReviewStore', 'failed to load reviews from SQLite', e);
     }
   },
 
@@ -119,7 +112,7 @@ export const useDailyReviewStore = create<DailyReviewStore>((set, get) => ({
 
     const newData = { ...data, reviews: newReviews };
     set({ data: newData });
-    syncEngine.schedule(review.id, () => dailyReviewApi.save(review), (isHighFreq ?? true) ? 500 : 300);
+    syncEngine.schedule(review.id, () => dailyReviewApi.save(review), (isHighFreq ?? true) ? HIGH_FREQ_DELAY : LOW_FREQ_DELAY);
     return review;
   },
 
@@ -131,7 +124,7 @@ export const useDailyReviewStore = create<DailyReviewStore>((set, get) => ({
 
     syncEngine.cancel(id);
     dailyReviewApi.delete(id).catch(e => {
-      console.error('Failed to delete review:', e);
+      logError('dailyReviewStore', 'failed to delete review', e);
     });
   },
 
@@ -148,7 +141,7 @@ export const useDailyReviewStore = create<DailyReviewStore>((set, get) => ({
     let streakCount = 1;
 
     for (let i = 1; i < dates.length; i++) {
-      const diff = getDaysDifference(dates[i - 1], dates[i]);
+      const diff = daysBetween(dates[i - 1], dates[i]);
       if (diff === 1) {
         streakCount++;
         longestStreak = Math.max(longestStreak, streakCount);
@@ -158,11 +151,11 @@ export const useDailyReviewStore = create<DailyReviewStore>((set, get) => ({
     }
 
     const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
+    const todayStr = todayYMD();
+
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
-    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+    const yesterdayStr = formatDateYMD(yesterday);
 
     const lastDate = dates[dates.length - 1];
     

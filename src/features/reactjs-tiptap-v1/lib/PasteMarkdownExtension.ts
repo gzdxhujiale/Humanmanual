@@ -1,6 +1,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { marked } from 'marked';
+import { logWarn } from '../../../lib/logger';
 
 function isMarkdownText(text: string): boolean {
   if (!text || text.trim().length === 0) return false;
@@ -39,7 +40,7 @@ export const PasteMarkdownExtension = Extension.create({
                   return true; // Intercept and finish paste handling
                 }
               } catch (e) {
-                console.warn('Failed to parse pasted markdown with marked:', e);
+                logWarn('pasteMarkdown', 'failed to parse pasted markdown with marked', e);
               }
             }
 

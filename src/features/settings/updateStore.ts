@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { getVersion } from '@tauri-apps/api/app';
 import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { usePreferencesStore } from './preferencesStore';
+import { logError, logSilent, logWarn } from '../../lib/logger';
 
 export type Update = any;
 
@@ -141,7 +142,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       try {
         tauriUpdate = await safeCheckTauriUpdate();
       } catch (err) {
-        console.warn('Tauri updater check returned warning/fallback:', err);
+        logWarn('updateStore', 'Tauri updater check returned warning/fallback', err);
       }
 
       // 2. Query GitHub Releases API directly for detailed release notes & assets
@@ -177,7 +178,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           apiNote = ' (GitHub API 触发访问频次限制)';
         }
       } catch (e) {
-        console.warn('GitHub API fetch release warning:', e);
+        logWarn('updateStore', 'GitHub API fetch release warning', e);
       }
 
       // If Tauri plugin updater found an update OR GitHub API found a newer tag
@@ -203,7 +204,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
         // Trigger automatic silent update if enabled
         if (get().autoUpdateEnabled) {
-          console.log('[AutoUpdate] New version detected, starting silent background download...');
+          logSilent('updateStore', 'new version detected, starting silent background download');
           await get().downloadAndInstall();
         }
       } else {
@@ -215,7 +216,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         });
       }
     } catch (err: any) {
-      console.error('Check update failed:', err);
+      logError('updateStore', 'check update failed', err);
       set({
         updateStatus: 'error',
         statusMessage: isSilent ? '' : `检查更新失败: ${err?.message || err || '网络异常'}`,
@@ -273,7 +274,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
             });
           }
         } catch (e) {
-          console.warn('Failed to send desktop update notification:', e);
+          logWarn('updateStore', 'failed to send desktop update notification', e);
         }
       } else {
         // Fallback when latest.json manifest is not present: open browser for actual asset download
@@ -294,7 +295,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         });
       }
     } catch (err: any) {
-      console.error('Download update error:', err);
+      logError('updateStore', 'download update failed', err);
       set({
         updateStatus: 'error',
         statusMessage: `更新下载失败: ${err?.message || err || '文件下载异常'}`

@@ -1,4 +1,4 @@
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteConnectOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::MySqlPool;
 use std::path::PathBuf;
 
@@ -42,352 +42,82 @@ pub async fn establish_local_connection() -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
+/// Copy every row of an entity's table from `$src` into `$dst`, skipping rows
+/// whose id already exists (used for the cloud → local pull).
+macro_rules! copy_table_keep_existing {
+    ($entity:ident, $src:expr, $dst:expr) => {{
+        if let Ok(rows) = $entity::Entity::find().all($src).await {
+            for r in rows {
+                let am = r.into_active_model().reset_all();
+                let _ = $entity::Entity::insert(am)
+                    .on_conflict(
+                        sea_orm::sea_query::OnConflict::column($entity::Column::Id)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec($dst)
+                    .await;
+            }
+        }
+    }};
+}
+
+/// Upsert every row of an entity's table from `$src` into `$dst`: on id
+/// conflict all columns except `id`/`created_at` are overwritten (used for
+/// the local → cloud push, where local is the source of truth).
+macro_rules! copy_table_upsert {
+    ($entity:ident, $src:expr, $dst:expr) => {{
+        let update_cols: Vec<$entity::Column> = <$entity::Column as sea_orm::Iterable>::iter()
+            .filter(|c| !matches!(sea_orm::IdenStatic::as_str(c), "id" | "created_at"))
+            .collect();
+        if let Ok(rows) = $entity::Entity::find().all($src).await {
+            for r in rows {
+                let am = r.into_active_model().reset_all();
+                let _ = $entity::Entity::insert(am)
+                    .on_conflict(
+                        sea_orm::sea_query::OnConflict::column($entity::Column::Id)
+                            .update_columns(update_cols.iter().copied())
+                            .to_owned(),
+                    )
+                    .exec($dst)
+                    .await;
+            }
+        }
+    }};
+}
+
+/// Apply `$macro` to every synced entity table (keep in step with
+/// `crate::schema::SYNCED_TABLES`).
+macro_rules! for_each_synced_table {
+    ($copy:ident, $src:expr, $dst:expr) => {{
+        $copy!(list_folders, $src, $dst);
+        $copy!(list_lists, $src, $dst);
+        $copy!(list_note_groups, $src, $dst);
+        $copy!(list_notes, $src, $dst);
+        $copy!(list_templates, $src, $dst);
+        $copy!(daily_reviews, $src, $dst);
+        $copy!(time_management_tasks, $src, $dst);
+        $copy!(mission_statement, $src, $dst);
+        $copy!(mission_roles, $src, $dst);
+        $copy!(mission_goals, $src, $dst);
+        $copy!(habits, $src, $dst);
+        $copy!(habit_checkins, $src, $dst);
+        $copy!(pomodoro_records, $src, $dst);
+        $copy!(pomodoro_favorites, $src, $dst);
+    }};
+}
+
 /// Pull all existing user data from remote TiDB MySQL into local SQLite (safe sync migration on startup).
 pub async fn pull_from_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use sea_orm::{EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel};
     use crate::entities::*;
 
     let db_sqlite = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(sqlite.clone());
     let db_mysql = sea_orm::SqlxMySqlConnector::from_sqlx_mysql_pool(mysql.clone());
 
-    // 1. list_folders
-    if let Ok(rows) = list_folders::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = list_folders::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                is_pinned: Set(r.is_pinned),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-                deleted_at: Set(r.deleted_at),
-            };
-            let _ = list_folders::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_folders::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
+    for_each_synced_table!(copy_table_keep_existing, &db_mysql, &db_sqlite);
 
-    // 2. list_lists
-    if let Ok(rows) = list_lists::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = list_lists::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                icon: Set(r.icon),
-                color: Set(r.color),
-                view_type: Set(r.view_type),
-                folder_id: Set(r.folder_id),
-                is_pinned: Set(r.is_pinned),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-                deleted_at: Set(r.deleted_at),
-            };
-            let _ = list_lists::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_lists::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 3. list_note_groups
-    if let Ok(rows) = list_note_groups::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = list_note_groups::ActiveModel {
-                id: Set(r.id),
-                list_id: Set(r.list_id),
-                name: Set(r.name),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = list_note_groups::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_note_groups::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 4. list_notes
-    if let Ok(rows) = list_notes::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = list_notes::ActiveModel {
-                id: Set(r.id),
-                list_id: Set(r.list_id),
-                group_id: Set(r.group_id),
-                title: Set(r.title),
-                content: Set(r.content),
-                is_pinned: Set(r.is_pinned),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-                deleted_at: Set(r.deleted_at),
-            };
-            let _ = list_notes::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_notes::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 5. list_templates
-    if let Ok(rows) = list_templates::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = list_templates::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                content: Set(r.content),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = list_templates::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_templates::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 6. daily_reviews
-    if let Ok(rows) = daily_reviews::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = daily_reviews::ActiveModel {
-                id: Set(r.id),
-                date: Set(r.date),
-                content: Set(r.content),
-                rating: Set(r.rating),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = daily_reviews::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(daily_reviews::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 7. time_management_tasks
-    if let Ok(rows) = time_management_tasks::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = time_management_tasks::ActiveModel {
-                id: Set(r.id),
-                title: Set(r.title),
-                role_id: Set(r.role_id),
-                quadrant: Set(r.quadrant),
-                scheduled_date: Set(r.scheduled_date),
-                time_of_day: Set(r.time_of_day),
-                completed: Set(r.completed),
-                created_at: Set(r.created_at),
-                completed_at: Set(r.completed_at),
-                description: Set(r.description),
-                deadline: Set(r.deadline),
-            };
-            let _ = time_management_tasks::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(time_management_tasks::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 8. mission_statement
-    if let Ok(rows) = mission_statement::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = mission_statement::ActiveModel {
-                id: Set(r.id),
-                content: Set(r.content),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = mission_statement::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_statement::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 9. mission_roles
-    if let Ok(rows) = mission_roles::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = mission_roles::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                icon: Set(r.icon),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = mission_roles::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_roles::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 10. mission_goals
-    if let Ok(rows) = mission_goals::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = mission_goals::ActiveModel {
-                id: Set(r.id),
-                role_id: Set(r.role_id),
-                title: Set(r.title),
-                status: Set(r.status),
-                time_scope: Set(r.time_scope),
-                start_date: Set(r.start_date),
-                end_date: Set(r.end_date),
-                sort_order: Set(r.sort_order),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = mission_goals::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_goals::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 11. habits
-    if let Ok(rows) = habits::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = habits::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                frequency: Set(r.frequency),
-                goal: Set(r.goal),
-                start_date: Set(r.start_date),
-                duration: Set(r.duration),
-                category: Set(r.category),
-                reminder: Set(r.reminder),
-                auto_popup_log: Set(r.auto_popup_log),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = habits::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(habits::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 12. habit_checkins
-    if let Ok(rows) = habit_checkins::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = habit_checkins::ActiveModel {
-                id: Set(r.id),
-                habit_id: Set(r.habit_id),
-                date: Set(r.date),
-                completed: Set(r.completed),
-                created_at: Set(r.created_at),
-                updated_at: Set(r.updated_at),
-            };
-            let _ = habit_checkins::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(habit_checkins::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 13. pomodoro_records
-    if let Ok(rows) = pomodoro_records::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = pomodoro_records::ActiveModel {
-                id: Set(r.id),
-                mode: Set(r.mode),
-                phase: Set(r.phase),
-                start_time: Set(r.start_time),
-                end_time: Set(r.end_time),
-                duration_minutes: Set(r.duration_minutes),
-                date: Set(r.date),
-                date_label: Set(r.date_label),
-                time_range_label: Set(r.time_range_label),
-                task_id: Set(r.task_id),
-                linked_target: Set(r.linked_target),
-                created_at: Set(r.created_at),
-            };
-            let _ = pomodoro_records::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(pomodoro_records::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 14. pomodoro_favorites
-    if let Ok(rows) = pomodoro_favorites::Entity::find().all(&db_mysql).await {
-        for r in rows {
-            let am = pomodoro_favorites::ActiveModel {
-                id: Set(r.id),
-                name: Set(r.name),
-                icon: Set(r.icon),
-                mode: Set(r.mode),
-                duration_minutes: Set(r.duration_minutes),
-                accumulated_minutes: Set(r.accumulated_minutes),
-                linked_target: Set(r.linked_target),
-                is_archived: Set(r.is_archived),
-                created_at: Set(r.created_at),
-            };
-            let _ = pomodoro_favorites::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(pomodoro_favorites::Column::Id)
-                        .do_nothing()
-                        .to_owned()
-                )
-                .exec(&db_sqlite)
-                .await;
-        }
-    }
-
-    // 15. app_preferences
+    // app_preferences (raw SQL: not a SeaORM entity)
     if let Ok(rows) = sqlx::query("SELECT pref_key, pref_value FROM app_preferences").fetch_all(mysql).await {
         use sqlx::Row;
         for row in rows {
@@ -404,13 +134,9 @@ pub async fn pull_from_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<()
     Ok(())
 }
 
-
-
-
-
 /// Push all local SQLite user data to remote TiDB MySQL (upward sync/queue flushing).
 pub async fn push_to_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use sea_orm::{EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel};
     use crate::entities::*;
 
     let db_sqlite = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(sqlite.clone());
@@ -422,430 +148,23 @@ pub async fn push_to_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), 
         .await
     {
         use sqlx::Row;
-        let safe_tables = [
-            "time_management_tasks", "daily_reviews", "mission_statement",
-            "mission_roles", "mission_goals", "habits", "habit_checkins",
-            "pomodoro_records", "pomodoro_favorites", "list_folders",
-            "list_lists", "list_notes", "list_note_groups", "list_templates"
-        ];
         for row in queue_items {
             let q_id: i64 = row.try_get("id").unwrap_or_default();
             let table_name: String = row.try_get("table_name").unwrap_or_default();
             let record_id: String = row.try_get("record_id").unwrap_or_default();
 
-            if safe_tables.contains(&table_name.as_str()) {
+            if crate::schema::SYNCED_TABLES.contains(&table_name.as_str()) {
                 let delete_sql = format!("DELETE FROM {} WHERE id = ?", table_name);
-                if let Ok(_) = sqlx::query(&delete_sql).bind(&record_id).execute(mysql).await {
+                if sqlx::query(&delete_sql).bind(&record_id).execute(mysql).await.is_ok() {
                     let _ = sqlx::query("DELETE FROM sync_queue WHERE id = ?").bind(q_id).execute(sqlite).await;
                 }
             }
         }
     }
 
-    // 1. list_folders
-    if let Ok(folders) = list_folders::Entity::find().all(&db_sqlite).await {
-        for f in folders {
-            let am = list_folders::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                is_pinned: Set(f.is_pinned),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-                deleted_at: Set(f.deleted_at),
-            };
-            let _ = list_folders::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_folders::Column::Id)
-                        .update_column(list_folders::Column::Name)
-                        .update_column(list_folders::Column::IsPinned)
-                        .update_column(list_folders::Column::SortOrder)
-                        .update_column(list_folders::Column::UpdatedAt)
-                        .update_column(list_folders::Column::DeletedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
+    for_each_synced_table!(copy_table_upsert, &db_sqlite, &db_mysql);
 
-    // 2. list_lists
-    if let Ok(items) = list_lists::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = list_lists::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                icon: Set(f.icon),
-                color: Set(f.color),
-                view_type: Set(f.view_type),
-                folder_id: Set(f.folder_id),
-                is_pinned: Set(f.is_pinned),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-                deleted_at: Set(f.deleted_at),
-            };
-            let _ = list_lists::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_lists::Column::Id)
-                        .update_column(list_lists::Column::Name)
-                        .update_column(list_lists::Column::Icon)
-                        .update_column(list_lists::Column::Color)
-                        .update_column(list_lists::Column::ViewType)
-                        .update_column(list_lists::Column::FolderId)
-                        .update_column(list_lists::Column::IsPinned)
-                        .update_column(list_lists::Column::SortOrder)
-                        .update_column(list_lists::Column::UpdatedAt)
-                        .update_column(list_lists::Column::DeletedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 3. list_note_groups
-    if let Ok(items) = list_note_groups::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = list_note_groups::ActiveModel {
-                id: Set(f.id),
-                list_id: Set(f.list_id),
-                name: Set(f.name),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = list_note_groups::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_note_groups::Column::Id)
-                        .update_column(list_note_groups::Column::Name)
-                        .update_column(list_note_groups::Column::SortOrder)
-                        .update_column(list_note_groups::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 4. list_notes
-    if let Ok(items) = list_notes::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = list_notes::ActiveModel {
-                id: Set(f.id),
-                list_id: Set(f.list_id),
-                group_id: Set(f.group_id),
-                title: Set(f.title),
-                content: Set(f.content),
-                is_pinned: Set(f.is_pinned),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-                deleted_at: Set(f.deleted_at),
-            };
-            let _ = list_notes::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_notes::Column::Id)
-                        .update_column(list_notes::Column::GroupId)
-                        .update_column(list_notes::Column::Title)
-                        .update_column(list_notes::Column::Content)
-                        .update_column(list_notes::Column::IsPinned)
-                        .update_column(list_notes::Column::SortOrder)
-                        .update_column(list_notes::Column::UpdatedAt)
-                        .update_column(list_notes::Column::DeletedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 5. list_templates
-    if let Ok(items) = list_templates::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = list_templates::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                content: Set(f.content),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = list_templates::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(list_templates::Column::Id)
-                        .update_column(list_templates::Column::Name)
-                        .update_column(list_templates::Column::Content)
-                        .update_column(list_templates::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 6. daily_reviews
-    if let Ok(items) = daily_reviews::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = daily_reviews::ActiveModel {
-                id: Set(f.id),
-                date: Set(f.date),
-                content: Set(f.content),
-                rating: Set(f.rating),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = daily_reviews::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(daily_reviews::Column::Id)
-                        .update_column(daily_reviews::Column::Content)
-                        .update_column(daily_reviews::Column::Rating)
-                        .update_column(daily_reviews::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 7. time_management_tasks
-    if let Ok(items) = time_management_tasks::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = time_management_tasks::ActiveModel {
-                id: Set(f.id),
-                title: Set(f.title),
-                role_id: Set(f.role_id),
-                quadrant: Set(f.quadrant),
-                scheduled_date: Set(f.scheduled_date),
-                time_of_day: Set(f.time_of_day),
-                completed: Set(f.completed),
-                created_at: Set(f.created_at),
-                completed_at: Set(f.completed_at),
-                description: Set(f.description),
-                deadline: Set(f.deadline),
-            };
-            let _ = time_management_tasks::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(time_management_tasks::Column::Id)
-                        .update_column(time_management_tasks::Column::Title)
-                        .update_column(time_management_tasks::Column::RoleId)
-                        .update_column(time_management_tasks::Column::Quadrant)
-                        .update_column(time_management_tasks::Column::ScheduledDate)
-                        .update_column(time_management_tasks::Column::TimeOfDay)
-                        .update_column(time_management_tasks::Column::Completed)
-                        .update_column(time_management_tasks::Column::CompletedAt)
-                        .update_column(time_management_tasks::Column::Description)
-                        .update_column(time_management_tasks::Column::Deadline)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 8. mission_statement
-    if let Ok(items) = mission_statement::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = mission_statement::ActiveModel {
-                id: Set(f.id),
-                content: Set(f.content),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = mission_statement::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_statement::Column::Id)
-                        .update_column(mission_statement::Column::Content)
-                        .update_column(mission_statement::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 9. mission_roles
-    if let Ok(items) = mission_roles::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = mission_roles::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                icon: Set(f.icon),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = mission_roles::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_roles::Column::Id)
-                        .update_column(mission_roles::Column::Name)
-                        .update_column(mission_roles::Column::Icon)
-                        .update_column(mission_roles::Column::SortOrder)
-                        .update_column(mission_roles::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 10. mission_goals
-    if let Ok(items) = mission_goals::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = mission_goals::ActiveModel {
-                id: Set(f.id),
-                role_id: Set(f.role_id),
-                title: Set(f.title),
-                status: Set(f.status),
-                time_scope: Set(f.time_scope),
-                start_date: Set(f.start_date),
-                end_date: Set(f.end_date),
-                sort_order: Set(f.sort_order),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = mission_goals::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(mission_goals::Column::Id)
-                        .update_column(mission_goals::Column::Title)
-                        .update_column(mission_goals::Column::Status)
-                        .update_column(mission_goals::Column::TimeScope)
-                        .update_column(mission_goals::Column::StartDate)
-                        .update_column(mission_goals::Column::EndDate)
-                        .update_column(mission_goals::Column::SortOrder)
-                        .update_column(mission_goals::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 11. habits
-    if let Ok(items) = habits::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = habits::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                frequency: Set(f.frequency),
-                goal: Set(f.goal),
-                start_date: Set(f.start_date),
-                duration: Set(f.duration),
-                category: Set(f.category),
-                reminder: Set(f.reminder),
-                auto_popup_log: Set(f.auto_popup_log),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = habits::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(habits::Column::Id)
-                        .update_column(habits::Column::Name)
-                        .update_column(habits::Column::Frequency)
-                        .update_column(habits::Column::Goal)
-                        .update_column(habits::Column::StartDate)
-                        .update_column(habits::Column::Duration)
-                        .update_column(habits::Column::Category)
-                        .update_column(habits::Column::Reminder)
-                        .update_column(habits::Column::AutoPopupLog)
-                        .update_column(habits::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 12. habit_checkins
-    if let Ok(items) = habit_checkins::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = habit_checkins::ActiveModel {
-                id: Set(f.id),
-                habit_id: Set(f.habit_id),
-                date: Set(f.date),
-                completed: Set(f.completed),
-                created_at: Set(f.created_at),
-                updated_at: Set(f.updated_at),
-            };
-            let _ = habit_checkins::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(habit_checkins::Column::Id)
-                        .update_column(habit_checkins::Column::Completed)
-                        .update_column(habit_checkins::Column::UpdatedAt)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 13. pomodoro_records
-    if let Ok(items) = pomodoro_records::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = pomodoro_records::ActiveModel {
-                id: Set(f.id),
-                mode: Set(f.mode),
-                phase: Set(f.phase),
-                start_time: Set(f.start_time),
-                end_time: Set(f.end_time),
-                duration_minutes: Set(f.duration_minutes),
-                date: Set(f.date),
-                date_label: Set(f.date_label),
-                time_range_label: Set(f.time_range_label),
-                task_id: Set(f.task_id),
-                linked_target: Set(f.linked_target),
-                created_at: Set(f.created_at),
-            };
-            let _ = pomodoro_records::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(pomodoro_records::Column::Id)
-                        .update_column(pomodoro_records::Column::Mode)
-                        .update_column(pomodoro_records::Column::Phase)
-                        .update_column(pomodoro_records::Column::StartTime)
-                        .update_column(pomodoro_records::Column::EndTime)
-                        .update_column(pomodoro_records::Column::DurationMinutes)
-                        .update_column(pomodoro_records::Column::Date)
-                        .update_column(pomodoro_records::Column::DateLabel)
-                        .update_column(pomodoro_records::Column::TimeRangeLabel)
-                        .update_column(pomodoro_records::Column::TaskId)
-                        .update_column(pomodoro_records::Column::LinkedTarget)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 14. pomodoro_favorites
-    if let Ok(items) = pomodoro_favorites::Entity::find().all(&db_sqlite).await {
-        for f in items {
-            let am = pomodoro_favorites::ActiveModel {
-                id: Set(f.id),
-                name: Set(f.name),
-                icon: Set(f.icon),
-                mode: Set(f.mode),
-                duration_minutes: Set(f.duration_minutes),
-                accumulated_minutes: Set(f.accumulated_minutes),
-                linked_target: Set(f.linked_target),
-                is_archived: Set(f.is_archived),
-                created_at: Set(f.created_at),
-            };
-            let _ = pomodoro_favorites::Entity::insert(am)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::column(pomodoro_favorites::Column::Id)
-                        .update_column(pomodoro_favorites::Column::Name)
-                        .update_column(pomodoro_favorites::Column::Icon)
-                        .update_column(pomodoro_favorites::Column::Mode)
-                        .update_column(pomodoro_favorites::Column::DurationMinutes)
-                        .update_column(pomodoro_favorites::Column::AccumulatedMinutes)
-                        .update_column(pomodoro_favorites::Column::LinkedTarget)
-                        .update_column(pomodoro_favorites::Column::IsArchived)
-                        .to_owned()
-                )
-                .exec(&db_mysql)
-                .await;
-        }
-    }
-
-    // 15. app_preferences
+    // app_preferences (raw SQL: not a SeaORM entity)
     if let Ok(rows) = sqlx::query("SELECT pref_key, pref_value FROM app_preferences").fetch_all(sqlite).await {
         use sqlx::Row;
         for row in rows {
@@ -907,7 +226,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("create in-memory SQLite");
-        crate::local_schema::ensure_local_tables(&pool)
+        crate::schema::ensure_local_tables(&pool)
             .await
             .expect("ensure local SQLite tables");
         pool
@@ -1052,4 +371,3 @@ mod tests {
         crate::db::trigger_background_push(&tidb_state, sqlite);
     }
 }
-

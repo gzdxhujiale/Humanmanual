@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use tauri::State;
-use crate::db::TidbState;
 
-fn now_iso() -> String {
-    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string()
-}
+use crate::db::TidbState;
+use crate::error::AppResult;
+use crate::sync::{now_iso, queue_and_sync_delete};
 
 // ── DTOs ──
 
@@ -54,13 +53,12 @@ pub struct MissionAllData {
 // ── Load all ──
 
 #[tauri::command]
-pub async fn mission_load_all(pool: State<'_, SqlitePool>) -> Result<MissionAllData, String> {
+pub async fn mission_load_all(pool: State<'_, SqlitePool>) -> AppResult<MissionAllData> {
     let stmt_row = sqlx::query(
         "SELECT id, content, updated_at FROM mission_statement WHERE id = 'default' LIMIT 1"
     )
     .fetch_optional(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let statement = stmt_row.map(|r| MissionStatement {
         id: r.try_get("id").unwrap_or_default(),
@@ -72,8 +70,7 @@ pub async fn mission_load_all(pool: State<'_, SqlitePool>) -> Result<MissionAllD
         "SELECT id, name, icon, sort_order, created_at, updated_at FROM mission_roles ORDER BY sort_order"
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let roles: Vec<Role> = role_rows
         .into_iter()
@@ -91,8 +88,7 @@ pub async fn mission_load_all(pool: State<'_, SqlitePool>) -> Result<MissionAllD
         "SELECT id, role_id, title, status, time_scope, start_date, end_date, sort_order, created_at, updated_at FROM mission_goals ORDER BY sort_order"
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let goals: Vec<Goal> = goal_rows
         .into_iter()
@@ -116,7 +112,7 @@ pub async fn mission_load_all(pool: State<'_, SqlitePool>) -> Result<MissionAllD
 // ── Mission Statement ──
 
 #[tauri::command]
-pub async fn mission_save_statement(content: String, pool: State<'_, SqlitePool>) -> Result<MissionStatement, String> {
+pub async fn mission_save_statement(content: String, pool: State<'_, SqlitePool>) -> AppResult<MissionStatement> {
     let now_str = now_iso();
     sqlx::query(
         "INSERT INTO mission_statement (id, content, updated_at) VALUES ('default', ?, ?)
@@ -125,8 +121,7 @@ pub async fn mission_save_statement(content: String, pool: State<'_, SqlitePool>
     .bind(&content)
     .bind(&now_str)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(MissionStatement { id: "default".into(), content, updated_at: now_str })
 }
@@ -134,7 +129,7 @@ pub async fn mission_save_statement(content: String, pool: State<'_, SqlitePool>
 // ── Role CRUD ──
 
 #[tauri::command]
-pub async fn mission_create_role(name: String, icon: String, sort_order: i32, pool: State<'_, SqlitePool>) -> Result<Role, String> {
+pub async fn mission_create_role(name: String, icon: String, sort_order: i32, pool: State<'_, SqlitePool>) -> AppResult<Role> {
     let id = uuid::Uuid::new_v4().to_string();
     let now_str = now_iso();
     sqlx::query(
@@ -142,20 +137,18 @@ pub async fn mission_create_role(name: String, icon: String, sort_order: i32, po
     )
     .bind(&id).bind(&name).bind(&icon).bind(sort_order).bind(&now_str).bind(&now_str)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(Role { id, name, icon, sort_order, created_at: now_str.clone(), updated_at: now_str })
 }
 
 #[tauri::command]
-pub async fn mission_update_role(id: String, name: String, icon: String, pool: State<'_, SqlitePool>) -> Result<(), String> {
+pub async fn mission_update_role(id: String, name: String, icon: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let now_str = now_iso();
     sqlx::query("UPDATE mission_roles SET name = ?, icon = ?, updated_at = ? WHERE id = ?")
         .bind(&name).bind(&icon).bind(&now_str).bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(())
 }
 
@@ -164,50 +157,45 @@ pub async fn mission_delete_role(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
-) -> Result<(), String> {
+) -> AppResult<()> {
+    // Local cascade: goals under the role, unlink tasks, then the role itself
     sqlx::query("DELETE FROM mission_goals WHERE role_id = ?")
         .bind(&id)
-        .execute(&*pool).await.map_err(|e| e.to_string())?;
+        .execute(&*pool).await?;
     sqlx::query("UPDATE time_management_tasks SET role_id = NULL WHERE role_id = ?")
         .bind(&id)
-        .execute(&*pool).await.map_err(|e| e.to_string())?;
+        .execute(&*pool).await?;
     sqlx::query("DELETE FROM mission_roles WHERE id = ?")
         .bind(&id)
-        .execute(&*pool).await.map_err(|e| e.to_string())?;
+        .execute(&*pool).await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('mission_roles', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
+    // Remote cascade first (goals/tasks), then the shared role-delete flow
     if let Some(ref mysql) = *tidb_state.inner().0.read().await {
         let _ = sqlx::query("DELETE FROM mission_goals WHERE role_id = ?").bind(&id).execute(mysql).await;
         let _ = sqlx::query("UPDATE time_management_tasks SET role_id = NULL WHERE role_id = ?").bind(&id).execute(mysql).await;
-        if let Ok(_) = sqlx::query("DELETE FROM mission_roles WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'mission_roles' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
     }
+    queue_and_sync_delete(&pool, &tidb_state, "mission_roles", &id).await;
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn mission_reorder_roles(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> Result<(), String> {
+pub async fn mission_reorder_roles(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let now_str = now_iso();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let mut tx = pool.begin().await?;
     for (id, order) in &items {
         sqlx::query("UPDATE mission_roles SET sort_order = ?, updated_at = ? WHERE id = ?")
             .bind(order).bind(&now_str).bind(id)
-            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            .execute(&mut *tx).await?;
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
+    tx.commit().await?;
     Ok(())
 }
 
 // ── Goal CRUD ──
 
 #[tauri::command]
-pub async fn mission_create_goal(role_id: String, title: String, sort_order: i32, pool: State<'_, SqlitePool>) -> Result<Goal, String> {
+pub async fn mission_create_goal(role_id: String, title: String, sort_order: i32, pool: State<'_, SqlitePool>) -> AppResult<Goal> {
     let id = uuid::Uuid::new_v4().to_string();
     let now_str = now_iso();
     sqlx::query(
@@ -215,8 +203,7 @@ pub async fn mission_create_goal(role_id: String, title: String, sort_order: i32
     )
     .bind(&id).bind(&role_id).bind(&title).bind(sort_order).bind(&now_str).bind(&now_str)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(Goal {
         id, role_id, title,
@@ -237,7 +224,7 @@ pub async fn mission_update_goal(
     start_date: Option<String>,
     end_date: Option<String>,
     pool: State<'_, SqlitePool>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let now_str = now_iso();
     let mut sets = Vec::new();
 
@@ -259,7 +246,7 @@ pub async fn mission_update_goal(
     q = q.bind(&now_str);
     q = q.bind(id);
 
-    q.execute(&*pool).await.map_err(|e| e.to_string())?;
+    q.execute(&*pool).await?;
     Ok(())
 }
 
@@ -268,35 +255,25 @@ pub async fn mission_delete_goal(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM mission_goals WHERE id = ?")
         .bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('mission_goals', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        if let Ok(_) = sqlx::query("DELETE FROM mission_goals WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'mission_goals' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
-    }
+    queue_and_sync_delete(&pool, &tidb_state, "mission_goals", &id).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn mission_reorder_goals(role_id: String, items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> Result<(), String> {
+pub async fn mission_reorder_goals(role_id: String, items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let now_str = now_iso();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let mut tx = pool.begin().await?;
     for (id, order) in &items {
         sqlx::query("UPDATE mission_goals SET sort_order = ?, updated_at = ? WHERE id = ? AND role_id = ?")
             .bind(order).bind(&now_str).bind(id).bind(&role_id)
-            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            .execute(&mut *tx).await?;
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
+    tx.commit().await?;
     Ok(())
 }

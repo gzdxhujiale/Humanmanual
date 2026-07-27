@@ -1,34 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "../../lib/tauriClient";
 import type { TimeManagementData } from "./timeManagementStore";
 import type { Task } from "./timeManagementTypes";
 
+/**
+ * timeManagementApi — data-access seam for the Time Management feature.
+ * All IPC goes through `call`, which owns logging and rethrow policy.
+ */
 export const timeManagementApi = {
-  loadAll: async (): Promise<TimeManagementData | null> => {
-    try {
-      const data = await invoke<any>("tm_load_all");
-      return data as TimeManagementData | null;
-    } catch (e) {
-      console.error("Failed to load time management data from DB:", e);
-      throw e;
-    }
-  },
-  
+  loadAll: (): Promise<TimeManagementData | null> =>
+    call<TimeManagementData | null>("tm_load_all"),
 
-  upsertTask: async (task: Task): Promise<void> => {
-    try {
-      await invoke("tm_upsert_task", { task });
-    } catch (e) {
-      console.error("Failed to upsert task:", e);
-      throw e;
-    }
-  },
+  upsertTask: (task: Task): Promise<void> => call("tm_upsert_task", { task }),
 
-  deleteTask: async (id: string): Promise<void> => {
-    try {
-      await invoke("tm_delete_task", { id });
-    } catch (e) {
-      console.error("Failed to delete task:", e);
-      throw e;
-    }
-  }
+  deleteTask: (id: string): Promise<void> => call("tm_delete_task", { id }),
 };

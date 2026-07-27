@@ -12,7 +12,8 @@ import { useTimeStore } from './timeManagementStore';
 import { QuadrantType, Task } from './timeManagementTypes';
 import { WeeklyPlanning } from './WeeklyPlanning';
 import { usePreferencesStore } from '../settings/preferencesStore';
-import { useMissionStore } from '../mission/MissionStore';
+import { useMissionStore } from '../mission/missionStore';
+import { todayYMD } from '../../lib/dateUtils';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import './timeManagement.css';
 
@@ -1010,7 +1011,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   useEffect(() => {
     if (tasks.length === 0) return;
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = todayYMD();
     const toUpdate = tasks.filter(
       t => t.scheduledDate === todayStr && !t.completed && t.quadrant !== 'Q2' && t.quadrant !== 'Q1'
     );

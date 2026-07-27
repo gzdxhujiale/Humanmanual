@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { Habit, HabitCheckIn, HabitStats } from './habitTypes';
 import { habitService } from './habitService';
+import { createSyncEngine, HIGH_FREQ_DELAY } from '../../lib/createSyncEngine';
+import { logError } from '../../lib/logger';
+import { formatDateYMD, todayYMD } from '../../lib/dateUtils';
 
 interface HabitState {
   habits: Habit[];
@@ -23,18 +26,12 @@ interface HabitState {
   getStats: (habitId: string, dateStr: string) => HabitStats;
 }
 
-const getTodayString = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+const syncEngine = createSyncEngine();
 
 export const useHabitStore = create<HabitState>((set, get) => ({
   habits: [],
   checkIns: [],
-  currentDate: getTodayString(),
+  currentDate: todayYMD(),
   isLoading: false,
   error: null,
 
@@ -61,39 +58,37 @@ export const useHabitStore = create<HabitState>((set, get) => ({
         ...newHabit,
         checkInTime: newHabit.checkInTime || newHabit.reminder || payload.checkInTime || '08:00:00',
       };
+      // The backend returns the persisted habit; no full reload needed.
       set((state) => ({ habits: [formattedHabit, ...state.habits] }));
-      await get().loadAll();
     } catch (error: any) {
-      console.error('Failed to create habit', error);
+      logError('habitStore', 'failed to create habit', error);
       throw error;
     }
   },
 
   updateHabit: async (id: string, payload: Partial<Habit>) => {
-    try {
-      // Optimistic update
-      set((state) => ({
-        habits: state.habits.map((h) => (h.id === id ? { ...h, ...payload } : h)),
-      }));
-      await habitService.updateHabit(id, payload);
-    } catch (error: any) {
-      console.error('Failed to update habit', error);
-      // Reload on failure
-      get().loadAll();
-      throw error;
+    // Optimistic update; persistence is debounced per habit.
+    set((state) => ({
+      habits: state.habits.map((h) => (h.id === id ? { ...h, ...payload } : h)),
+    }));
+    const updated = get().habits.find((h) => h.id === id);
+    if (updated) {
+      const { id: _, ...fields } = updated;
+      syncEngine.schedule(`habit:${id}`, () => habitService.updateHabit(id, fields), HIGH_FREQ_DELAY);
     }
   },
 
   deleteHabit: async (id: string) => {
+    set((state) => ({
+      habits: state.habits.filter((h) => h.id !== id),
+      checkIns: state.checkIns.filter((c) => c.habitId !== id),
+    }));
+    // Cancel any pending upsert so it cannot resurrect the deleted habit.
+    syncEngine.cancel(`habit:${id}`);
     try {
-      set((state) => ({
-        habits: state.habits.filter((h) => h.id !== id),
-        checkIns: state.checkIns.filter((c) => c.habitId !== id),
-      }));
       await habitService.deleteHabit(id);
-      await get().loadAll();
     } catch (error: any) {
-      console.error('Failed to delete habit', error);
+      logError('habitStore', 'failed to delete habit', error);
       get().loadAll();
       throw error;
     }
@@ -140,7 +135,7 @@ export const useHabitStore = create<HabitState>((set, get) => ({
         return { checkIns: newCheckIns };
       });
     } catch (error: any) {
-      console.error('Failed to toggle checkin', error);
+      logError('habitStore', 'failed to toggle checkin', error);
       get().loadAll();
       throw error;
     }
@@ -226,10 +221,7 @@ export const useHabitStore = create<HabitState>((set, get) => ({
     for (let i = 0; i < 365; i++) {
       const checkDate = new Date(today);
       checkDate.setDate(today.getDate() - i);
-      const yearStr = checkDate.getFullYear();
-      const monthStr = String(checkDate.getMonth() + 1).padStart(2, '0');
-      const dayStr = String(checkDate.getDate()).padStart(2, '0');
-      const dateString = `${yearStr}-${monthStr}-${dayStr}`;
+      const dateString = formatDateYMD(checkDate);
 
       if (completedDates.has(dateString)) {
         streak++;

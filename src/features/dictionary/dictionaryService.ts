@@ -1,6 +1,7 @@
-import { invoke } from '@tauri-apps/api/core';
+import { call } from '../../lib/tauriClient';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emitTo } from '@tauri-apps/api/event';
+import { logError, logWarn } from '../../lib/logger';
 import { DictEntry } from './dictionaryTypes';
 
 /** Single reusable label so Ctrl+L always reuses the same popup window. */
@@ -15,7 +16,7 @@ export interface DictionaryLookupPayload {
 
 /** Query the bundled ECDICT database via the Rust backend. */
 export async function lookupWord(word: string): Promise<DictEntry> {
-  return await invoke<DictEntry>('dict_lookup', { word });
+  return await call<DictEntry>('dict_lookup', { word });
 }
 
 function buildUrl(initialWord: string): string {
@@ -57,11 +58,11 @@ export async function openDictionaryWindow(initialWord: string = ''): Promise<vo
     });
 
     webview.once('tauri://error', (e) => {
-      console.error('Failed to create dictionary window', e);
+      logError('dictionary', 'failed to create dictionary window', e);
       window.open(buildUrl(initialWord), label, 'width=460,height=560');
     });
   } catch (err) {
-    console.warn('Tauri WebviewWindow unavailable, falling back to window.open', err);
+    logWarn('dictionary', 'Tauri WebviewWindow unavailable, falling back to window.open', err);
     window.open(buildUrl(initialWord), label, 'width=460,height=560');
   }
 }

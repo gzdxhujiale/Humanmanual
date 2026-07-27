@@ -5,6 +5,7 @@ import { useDailyReviewStore } from './dailyReviewStore';
 import { DailyReview, CompoundStats as CompoundStatsType } from './dailyReviewTypes';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import { useReviewAutoSave } from './useReviewAutoSave';
+import { formatDateYMD, todayYMD } from '../../lib/dateUtils';
 import './dailyReview.css';
 
 // ==========================================
@@ -241,10 +242,7 @@ const CompoundStats: React.FC<CompoundStatsProps> = ({ stats, reviews, onSelectD
 // ==========================================
 // 3. DailyReviewPanel Main Component
 // ==========================================
-const getTodayStr = (): string => {
-  const today = new Date();
-  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-};
+const getTodayStr = (): string => todayYMD();
 
 const formatDateDisplay = (dateStr: string): string => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -289,7 +287,7 @@ export const DailyReviewPanel: React.FC = () => {
     minDate.setHours(0, 0, 0, 0);
     if (d < minDate) return;
 
-    setSelectedDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    setSelectedDate(formatDateYMD(d));
   };
 
   const isCurrentToday = selectedDate === getTodayStr();

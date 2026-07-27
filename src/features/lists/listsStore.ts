@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { List, Folder, Note, Template, ListsData, NoteGroup } from './listsTypes';
 import * as listsService from './listsService';
-import { createSyncEngine } from '../../lib/createSyncEngine';
+import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/createSyncEngine';
+import { logError, logSilent } from '../../lib/logger';
 import { useTemplateStore } from '../templates/templateStore';
 import { DEFAULT_TEMPLATES } from '../templates/templateTypes';
 
@@ -11,21 +12,22 @@ function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-const HIGH_FREQ_DELAY = 500;
-const LOW_FREQ_DELAY = 300;
-
 let noteSyncChannel: BroadcastChannel | null = null;
 try {
   if (typeof BroadcastChannel !== 'undefined') {
     noteSyncChannel = new BroadcastChannel('humanmanual_note_sync');
   }
-} catch (e) {}
+} catch (e) {
+  logSilent('listsStore', 'BroadcastChannel unavailable', e);
+}
 
 function broadcastNoteUpdate(noteId: string, updates: Partial<Note>) {
   if (noteSyncChannel) {
     try {
       noteSyncChannel.postMessage({ type: 'NOTE_UPDATED', noteId, updates });
-    } catch (e) {}
+    } catch (e) {
+      logSilent('listsStore', 'note sync broadcast failed', e);
+    }
   }
 }
 
@@ -108,7 +110,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
             }
             localStorage.setItem(MIGRATION_KEY, 'true');
           } catch (mErr) {
-            console.error('Legacy localStorage migration error:', mErr);
+            logError('listsStore', 'legacy localStorage migration failed', mErr);
           }
         }
 
@@ -149,7 +151,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
           };
         }
       } catch (e) {
-        console.error('Failed to load from SQLite:', e);
+        logError('listsStore', 'failed to load from SQLite', e);
         set({ initialized: true });
       }
     })();

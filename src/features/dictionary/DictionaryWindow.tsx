@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Minus, Square, Copy, X, Search, Star, Pin } from 'lucide-react';
 import { lookupWord, DICTIONARY_LOOKUP_EVENT, DictionaryLookupPayload } from './dictionaryService';
 import { DictEntry } from './dictionaryTypes';
+import { logWarn } from '../../lib/logger';
 import './dictionary.css';
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
@@ -103,7 +104,7 @@ export function DictionaryWindow() {
           setIsMaximized(await win.isMaximized());
         });
       } catch (e) {
-        console.warn('Dictionary window state listener warning:', e);
+        logWarn('dictionaryWindow', 'window state listener warning', e);
       }
     };
     void init();
@@ -122,7 +123,7 @@ export function DictionaryWindow() {
     try {
       void getCurrentWindow().startDragging();
     } catch (err) {
-      console.warn('startDragging error:', err);
+      logWarn('dictionaryWindow', 'startDragging error', err);
     }
   };
 

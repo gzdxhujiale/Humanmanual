@@ -3,14 +3,11 @@
 @import './styles/_variables.scss';
 @import './styles/_keyframe-animations.scss';
 
-/* ── Module CSS imports ────────────────────────────────────────── */
+/* Global app styles only; feature CSS is imported by its own feature entry */
 @import "./styles/layout.css";
 @import "./styles/shared.css";
 @import "./styles/settings.css";
 @import "./styles/dialog.css";
-@import "./features/time-management/timeManagement.css";
-@import "./features/reactjs-tiptap-v1/editor.css";
-@import "./features/pomodoro/pomodoro.css";
 
 :root {
   color: #20242a;

@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { PomodoroMode, PomodoroPhase, PomodoroRecord, PomodoroStats, FavoriteFocusTask, LinkedTarget } from './pomodoroTypes';
 import { pomodoroService } from './pomodoroService';
-import { createSyncEngine } from '../../lib/createSyncEngine';
+import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '../../lib/createSyncEngine';
+import { logError, logSilent, logWarn } from '../../lib/logger';
+import { todayYMD } from '../../lib/dateUtils';
 
 const STORAGE_KEY_RECORDS = 'fishworker_pomodoro_records_v1';
 const STORAGE_KEY_FAVORITES = 'fishworker_pomodoro_favorites_v1';
@@ -21,149 +23,23 @@ export const formatTimeStr = (dateObj: Date): string => {
   return `${formatTimeDigit(dateObj.getHours())}:${formatTimeDigit(dateObj.getMinutes())}`;
 };
 
-export const getTodayDateStr = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${formatTimeDigit(d.getMonth() + 1)}-${formatTimeDigit(d.getDate())}`;
-};
-
-// Initial Mock Favorite Task matching Screenshot 2 ("专注任务1")
-const initialMockFavorites: FavoriteFocusTask[] = [
-  {
-    id: 'fav-1',
-    name: '专注任务1',
-    icon: '😊',
-    mode: 'pomodoro',
-    durationMinutes: 25,
-    accumulatedMinutes: 0,
-    isArchived: false,
-    createdAt: new Date().toISOString(),
-  },
-];
-
-// Initial Mock Records matching Screenshot 2 (including "o 习惯一" under 14:08-14:33)
-const initialMockRecords: PomodoroRecord[] = [
-  {
-    id: 'mock-1',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '14:08',
-    endTime: '14:33',
-    durationMinutes: 25,
-    date: getTodayDateStr(),
-    dateLabel: '7月22日',
-    timeRangeLabel: '14:08 - 14:33',
-    linkedTarget: {
-      type: 'habit',
-      id: 'habit-1',
-      title: '习惯一',
-    },
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-  },
-  {
-    id: 'mock-2',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '13:36',
-    endTime: '14:01',
-    durationMinutes: 25,
-    date: getTodayDateStr(),
-    dateLabel: '7月22日',
-    timeRangeLabel: '13:36 - 14:01',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
-  },
-  {
-    id: 'mock-3',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '11:32',
-    endTime: '11:53',
-    durationMinutes: 20,
-    date: getTodayDateStr(),
-    dateLabel: '7月22日',
-    timeRangeLabel: '11:32 - 11:53',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-  },
-  {
-    id: 'mock-4',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '11:01',
-    endTime: '11:26',
-    durationMinutes: 25,
-    date: getTodayDateStr(),
-    dateLabel: '7月22日',
-    timeRangeLabel: '11:01 - 11:26',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
-  },
-  {
-    id: 'mock-5',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '10:36',
-    endTime: '11:01',
-    durationMinutes: 25,
-    date: getTodayDateStr(),
-    dateLabel: '7月22日',
-    timeRangeLabel: '10:36 - 11:01',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 7).toISOString(),
-  },
-  // 7月21日
-  {
-    id: 'mock-6',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '14:24',
-    endTime: '15:35',
-    durationMinutes: 71,
-    date: '2026-07-21',
-    dateLabel: '7月21日',
-    timeRangeLabel: '14:24 - 15:35',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 28).toISOString(),
-  },
-  {
-    id: 'mock-7',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '13:53',
-    endTime: '14:18',
-    durationMinutes: 25,
-    date: '2026-07-21',
-    dateLabel: '7月21日',
-    timeRangeLabel: '13:53 - 14:18',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 29).toISOString(),
-  },
-  // 7月15日
-  {
-    id: 'mock-8',
-    mode: 'pomodoro',
-    phase: 'focus',
-    startTime: '09:22',
-    endTime: '09:47',
-    durationMinutes: 25,
-    date: '2026-07-15',
-    dateLabel: '7月15日',
-    timeRangeLabel: '9:22 - 9:47',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
-  },
-];
+export const getTodayDateStr = (): string => todayYMD();
 
 const loadSavedRecords = (): PomodoroRecord[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_RECORDS);
     if (raw !== null) return JSON.parse(raw);
   } catch (e) {
-    console.error('Failed to load records from localStorage', e);
+    logError('pomodoroStore', 'failed to load records from localStorage', e);
   }
-  const isInit = localStorage.getItem(STORAGE_KEY_INITIALIZED);
-  if (isInit === 'true') return [];
-  return initialMockRecords;
+  return [];
 };
 
 const saveRecords = (records: PomodoroRecord[]) => {
   try {
     localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
   } catch (e) {
-    console.error('Failed to save records to localStorage', e);
+    logError('pomodoroStore', 'failed to save records to localStorage', e);
   }
 };
 
@@ -172,22 +48,20 @@ const loadSavedFavorites = (): FavoriteFocusTask[] => {
     const raw = localStorage.getItem(STORAGE_KEY_FAVORITES);
     if (raw !== null) return JSON.parse(raw);
   } catch (e) {
-    console.error('Failed to load favorites from localStorage', e);
+    logError('pomodoroStore', 'failed to load favorites from localStorage', e);
   }
-  return initialMockFavorites;
+  return [];
 };
 
 const saveFavorites = (favs: FavoriteFocusTask[]) => {
   try {
     localStorage.setItem(STORAGE_KEY_FAVORITES, JSON.stringify(favs));
   } catch (e) {
-    console.error('Failed to save favorites to localStorage', e);
+    logError('pomodoroStore', 'failed to save favorites to localStorage', e);
   }
 };
 
 const syncEngine = createSyncEngine();
-const HIGH_FREQ_DELAY = 500;
-const LOW_FREQ_DELAY = 300;
 
 interface PomodoroState {
   mode: PomodoroMode;
@@ -257,7 +131,9 @@ export const requestNotificationPermission = async () => {
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
       try {
         await Notification.requestPermission();
-      } catch (err) {}
+      } catch (err) {
+        logSilent('pomodoroStore', 'web notification permission request failed', err);
+      }
     }
   }
 };
@@ -277,7 +153,7 @@ export const sendDesktopNotification = async (title: string, body: string) => {
       return;
     }
   } catch (e) {
-    console.warn('Tauri notification plugin failed, trying Web Notification fallback:', e);
+    logWarn('pomodoroStore', 'Tauri notification plugin failed, trying Web Notification fallback', e);
   }
 
   // Fallback to Web Notification API
@@ -288,7 +164,7 @@ export const sendDesktopNotification = async (title: string, body: string) => {
         tag: 'fishworker-pomodoro-notification',
       });
     } catch (e) {
-      console.error('Failed to send desktop notification via Web API:', e);
+      logError('pomodoroStore', 'failed to send desktop notification via Web API', e);
     }
   }
 };
@@ -331,33 +207,15 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
     try {
       const dbData = await pomodoroService.loadAll();
       const minMins = await pomodoroService.getMinEffectiveMinutes();
-      const isInit = localStorage.getItem(STORAGE_KEY_INITIALIZED);
 
       let mergedRecords: PomodoroRecord[];
       let mergedFavs: FavoriteFocusTask[];
 
       if (dbData.isFromDb) {
-        if (!isInit && dbData.records.length === 0) {
-          // Brand new app launch before any records or initialization:
-          mergedRecords = initialMockRecords;
-          localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
-          for (const rec of initialMockRecords) {
-            pomodoroService.upsertRecord(rec).catch(() => {});
-          }
-        } else {
-          // DB is ground truth! (Even if [])
-          mergedRecords = dbData.records;
-          localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
-        }
-
-        if (!isInit && dbData.favoriteTasks.length === 0) {
-          mergedFavs = initialMockFavorites;
-          for (const fav of initialMockFavorites) {
-            pomodoroService.upsertFavoriteTask(fav).catch(() => {});
-          }
-        } else {
-          mergedFavs = dbData.favoriteTasks.length > 0 ? dbData.favoriteTasks : get().favoriteTasks;
-        }
+        // DB is ground truth (even if empty).
+        mergedRecords = dbData.records;
+        localStorage.setItem(STORAGE_KEY_INITIALIZED, 'true');
+        mergedFavs = dbData.favoriteTasks.length > 0 ? dbData.favoriteTasks : get().favoriteTasks;
       } else {
         mergedRecords = dbData.records;
         mergedFavs = dbData.favoriteTasks;
@@ -372,7 +230,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
         minEffectiveMinutes: minMins,
       });
     } catch (e) {
-      console.error('Failed to sync pomodoro data from DB:', e);
+      logError('pomodoroStore', 'failed to sync pomodoro data from DB', e);
     }
   },
 
@@ -615,7 +473,9 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => ({
     try {
       const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
       audio.play().catch(() => {});
-    } catch (e) {}
+    } catch (e) {
+      logSilent('pomodoroStore', 'chime playback failed', e);
+    }
 
     // Auto transition
     if (state.mode === 'pomodoro') {

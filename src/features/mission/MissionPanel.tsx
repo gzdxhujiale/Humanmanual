@@ -6,9 +6,9 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { useConfirmDialog } from "../../components/ui/ConfirmDeleteDialog";
-import { useMissionStore } from "./MissionStore";
-import type { Goal, GoalStatus, TimeScope } from "./MissionTypes";
-import { GOAL_STATUS_LABELS, TIME_SCOPE_LABELS } from "./MissionTypes";
+import { useMissionStore } from "./missionStore";
+import type { Goal, GoalStatus, TimeScope } from "./missionTypes";
+import { GOAL_STATUS_LABELS, TIME_SCOPE_LABELS } from "./missionTypes";
 import "./MissionPanel.css";
 
 // ==========================================

@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::OnceCell;
 
+use crate::error::{AppError, AppResult};
+
 /// A single dictionary entry returned to the frontend.
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -45,9 +47,9 @@ impl DictState {
         }
     }
 
-    async fn pool(&self) -> Result<&SqlitePool, String> {
+    async fn pool(&self) -> AppResult<&SqlitePool> {
         let path = self.db_path.as_ref().ok_or_else(|| {
-            "词库未安装：未找到 ecdict.db，请先运行 `pnpm build:dict` 生成词库。".to_string()
+            AppError::from("词库未安装：未找到 ecdict.db，请先运行 `pnpm build:dict` 生成词库。")
         })?;
         self.pool
             .get_or_try_init(|| async {
@@ -59,7 +61,7 @@ impl DictState {
                     .max_connections(2)
                     .connect_with(opts)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(AppError::from)
             })
             .await
     }
@@ -85,15 +87,14 @@ pub fn resolve_dict_path(app: &AppHandle) -> Option<PathBuf> {
     None
 }
 
-async fn query_word(pool: &SqlitePool, word: &str) -> Result<Option<DictEntry>, String> {
+async fn query_word(pool: &SqlitePool, word: &str) -> AppResult<Option<DictEntry>> {
     let row = sqlx::query(
         "SELECT word, phonetic, definition, translation, pos, collins, oxford, tag, exchange \
          FROM stardict WHERE word = ? COLLATE NOCASE LIMIT 1",
     )
     .bind(word)
     .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(row.map(|r| DictEntry {
         word: r.get::<Option<String>, _>("word").unwrap_or_default(),
@@ -110,12 +111,11 @@ async fn query_word(pool: &SqlitePool, word: &str) -> Result<Option<DictEntry>, 
     }))
 }
 
-async fn query_lemma(pool: &SqlitePool, word: &str) -> Result<Option<String>, String> {
+async fn query_lemma(pool: &SqlitePool, word: &str) -> AppResult<Option<String>> {
     let row = sqlx::query("SELECT base FROM lemma WHERE variant = ? COLLATE NOCASE LIMIT 1")
         .bind(word)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(row.map(|r| r.get::<String, _>("base")))
 }
 
@@ -151,10 +151,10 @@ fn naive_stems(word: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn dict_lookup(word: String, state: State<'_, DictState>) -> Result<DictEntry, String> {
+pub async fn dict_lookup(word: String, state: State<'_, DictState>) -> AppResult<DictEntry> {
     let query = word.trim().to_lowercase();
     if query.is_empty() {
-        return Err("请输入要查询的单词".to_string());
+        return Err("请输入要查询的单词".into());
     }
 
     let pool = state.pool().await?;

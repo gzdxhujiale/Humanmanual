@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use tauri::State;
 
+use crate::db::TidbState;
+use crate::error::AppResult;
+use crate::sync::queue_and_sync_delete;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Role {
@@ -35,13 +39,12 @@ pub struct TimeManagementData {
 }
 
 #[tauri::command]
-pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> Result<TimeManagementData, String> {
+pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagementData> {
     let roles_rows = sqlx::query(
         "SELECT id, name, CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at FROM mission_roles ORDER BY sort_order"
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let mut roles = Vec::new();
     for row in roles_rows {
@@ -57,8 +60,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> Result<TimeManagementDa
         "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline FROM time_management_tasks"
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let mut tasks = Vec::new();
     for row in tasks_rows {
@@ -82,7 +84,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> Result<TimeManagementDa
 
 
 #[tauri::command]
-pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> Result<(), String> {
+pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let completed_val: i32 = if task.completed { 1 } else { 0 };
     sqlx::query(
         "INSERT INTO time_management_tasks (id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline) 
@@ -111,36 +113,23 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> Result<(
     .bind(&task.description)
     .bind(task.deadline)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    
+    .await?;
+
     Ok(())
 }
-
-use crate::db::TidbState;
 
 #[tauri::command]
 pub async fn tm_delete_task(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM time_management_tasks WHERE id = ?")
         .bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('time_management_tasks', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        if let Ok(_) = sqlx::query("DELETE FROM time_management_tasks WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'time_management_tasks' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
-    }
+    queue_and_sync_delete(&pool, &tidb_state, "time_management_tasks", &id).await;
 
     Ok(())
 }

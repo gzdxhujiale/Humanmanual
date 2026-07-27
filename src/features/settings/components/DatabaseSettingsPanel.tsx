@@ -1,11 +1,11 @@
 import React from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "../../../lib/tauriClient";
 
 function getDatabaseApi() {
   if (window.aistudyDatabase) return window.aistudyDatabase;
   return {
-    getConfig: () => invoke("db_get_config"),
-    saveConfig: (config: any) => invoke("db_save_config", { config })
+    getConfig: () => call("db_get_config"),
+    saveConfig: (config: any) => call("db_save_config", { config })
   };
 }
 

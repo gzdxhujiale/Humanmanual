@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use tauri::State;
+
 use crate::db::TidbState;
+use crate::error::AppResult;
+use crate::sync::queue_and_sync_delete;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkedTarget {
@@ -60,7 +63,7 @@ pub struct PomodoroData {
 }
 
 #[tauri::command]
-pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> Result<PomodoroData, String> {
+pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> AppResult<PomodoroData> {
     let records_rows = sqlx::query(
         r#"
         SELECT id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at
@@ -69,8 +72,7 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> Result<PomodoroDa
         "#,
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let records = records_rows
         .into_iter()
@@ -115,8 +117,7 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> Result<PomodoroDa
         "#,
     )
     .fetch_all(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let favorite_tasks = favs_rows
         .into_iter()
@@ -157,7 +158,7 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> Result<PomodoroDa
 pub async fn pomodoro_upsert_record(
     record: PomodoroRecord,
     pool: State<'_, SqlitePool>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let linked_target_json = record
         .linked_target
         .as_ref()
@@ -194,8 +195,7 @@ pub async fn pomodoro_upsert_record(
     .bind(&linked_target_json)
     .bind(&record.created_at)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(())
 }
@@ -205,23 +205,13 @@ pub async fn pomodoro_delete_record(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM pomodoro_records WHERE id = ?")
         .bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('pomodoro_records', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        if let Ok(_) = sqlx::query("DELETE FROM pomodoro_records WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'pomodoro_records' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
-    }
+    queue_and_sync_delete(&pool, &tidb_state, "pomodoro_records", &id).await;
 
     Ok(())
 }
@@ -230,11 +220,10 @@ pub async fn pomodoro_delete_record(
 pub async fn pomodoro_clear_all_records(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM pomodoro_records")
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'pomodoro_records'")
         .execute(&*pool)
@@ -251,7 +240,7 @@ pub async fn pomodoro_clear_all_records(
 pub async fn pomodoro_upsert_favorite(
     task: FavoriteFocusTask,
     pool: State<'_, SqlitePool>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let linked_target_json = task
         .linked_target
         .as_ref()
@@ -283,8 +272,7 @@ pub async fn pomodoro_upsert_favorite(
     .bind(is_archived_val)
     .bind(&task.created_at)
     .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(())
 }
@@ -294,23 +282,13 @@ pub async fn pomodoro_delete_favorite(
     id: String,
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     sqlx::query("DELETE FROM pomodoro_favorites WHERE id = ?")
         .bind(&id)
         .execute(&*pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    let _ = sqlx::query("INSERT OR REPLACE INTO sync_queue (table_name, record_id, action) VALUES ('pomodoro_favorites', ?, 'DELETE')")
-        .bind(&id)
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        if let Ok(_) = sqlx::query("DELETE FROM pomodoro_favorites WHERE id = ?").bind(&id).execute(mysql).await {
-            let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'pomodoro_favorites' AND record_id = ? AND action = 'DELETE'").bind(&id).execute(&*pool).await;
-        }
-    }
+    queue_and_sync_delete(&pool, &tidb_state, "pomodoro_favorites", &id).await;
 
     Ok(())
 }

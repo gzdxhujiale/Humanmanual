@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Power, Info } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { logWarn } from '../../../lib/logger';
 import { usePreferencesStore } from '../preferencesStore';
 
 export function GeneralSettingsPanel() {
@@ -34,7 +35,7 @@ export function GeneralSettingsPanel() {
       setAutostartEnabled(checked);
       await setPreference('app-autostart', String(checked));
     } catch (e) {
-      console.warn('Tauri autostart plugin call failed, persisting in preferences:', e);
+      logWarn('settings', 'Tauri autostart plugin call failed, persisting in preferences', e);
       setAutostartEnabled(checked);
       await setPreference('app-autostart', String(checked));
     } finally {

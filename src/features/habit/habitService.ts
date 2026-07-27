@@ -1,24 +1,20 @@
-import { invoke } from '@tauri-apps/api/core';
+import { call } from '../../lib/tauriClient';
 import { Habit, HabitCheckIn, HabitData } from './habitTypes';
 
+/**
+ * habitService — data-access seam for the Habit feature.
+ * All IPC goes through `call`, which owns logging and rethrow policy.
+ */
 export const habitService = {
-  async loadAll(): Promise<HabitData> {
-    return invoke('habit_load_all');
-  },
+  loadAll: (): Promise<HabitData> => call<HabitData>('habit_load_all'),
 
-  async createHabit(payload: Partial<Habit>): Promise<Habit> {
-    return invoke('habit_create', { payload });
-  },
+  createHabit: (payload: Partial<Habit>): Promise<Habit> => call<Habit>('habit_create', { payload }),
 
-  async updateHabit(id: string, payload: Partial<Habit>): Promise<void> {
-    return invoke('habit_update', { id, payload });
-  },
+  updateHabit: (id: string, payload: Partial<Habit>): Promise<void> =>
+    call('habit_update', { id, payload }),
 
-  async deleteHabit(id: string): Promise<void> {
-    return invoke('habit_delete', { id });
-  },
+  deleteHabit: (id: string): Promise<void> => call('habit_delete', { id }),
 
-  async toggleCheckIn(habitId: string, date: string, completed: boolean): Promise<HabitCheckIn> {
-    return invoke('habit_toggle_checkin', { habitId, date, completed });
-  }
+  toggleCheckIn: (habitId: string, date: string, completed: boolean): Promise<HabitCheckIn> =>
+    call<HabitCheckIn>('habit_toggle_checkin', { habitId, date, completed }),
 };

@@ -16,7 +16,17 @@
  * will naturally reschedule a write.
  */
 
-const DEFAULT_DELAY_MS = 500;
+import { logError } from './logger';
+
+/**
+ * Shared debounce delays. HIGH_FREQ is for keystroke-driven edits (typing in
+ * a title/content field); LOW_FREQ is for discrete actions (create, move,
+ * reorder) that should persist quickly.
+ */
+export const HIGH_FREQ_DELAY = 500;
+export const LOW_FREQ_DELAY = 300;
+
+const DEFAULT_DELAY_MS = HIGH_FREQ_DELAY;
 
 export interface SyncEngine {
   schedule(key: string, persist: () => Promise<void>, delay?: number): void;
@@ -37,7 +47,7 @@ export function createSyncEngine(): SyncEngine {
         try {
           await persist();
         } catch (err) {
-          console.error(`[syncEngine] persist failed for key "${key}":`, err);
+          logError('syncEngine', `persist failed for key "${key}"`, err);
         } finally {
           timers.delete(key);
         }

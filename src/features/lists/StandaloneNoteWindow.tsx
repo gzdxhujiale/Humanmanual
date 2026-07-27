@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useListsStore } from './listsStore';
 import { Note } from './listsTypes';
 import { MoreHorizontal, Pin, Cloud, Minus, Square, Copy, X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import * as listsService from './listsService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { logWarn } from '../../lib/logger';
 import { ReactjsTiptapEditor, convertMarkdownToTipTapJson, convertTipTapJsonToMarkdown } from '../reactjs-tiptap-v1';
 import './lists.css';
 
@@ -77,7 +78,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
           setIsMaximized(await appWin.isMaximized());
         });
       } catch (e) {
-        console.warn('Tauri window API listener warning:', e);
+        logWarn('standaloneNote', 'Tauri window API listener warning', e);
       }
     };
     initWindowState();
@@ -137,7 +138,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
     try {
       await getCurrentWindow().minimize();
     } catch (err) {
-      console.warn('Failed to minimize window:', err);
+      logWarn('standaloneNote', 'failed to minimize window', err);
     }
   };
 
@@ -147,7 +148,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
       await appWin.toggleMaximize();
       setIsMaximized(await appWin.isMaximized());
     } catch (err) {
-      console.warn('Failed to toggle maximize:', err);
+      logWarn('standaloneNote', 'failed to toggle maximize', err);
     }
   };
 
@@ -179,7 +180,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
       try {
         getCurrentWindow().startDragging();
       } catch (err) {
-        console.warn('startDragging error:', err);
+        logWarn('standaloneNote', 'startDragging error', err);
       }
     }
   };
@@ -202,26 +203,19 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
   };
 
   const handleImport = async () => {
-    try {
-      const mdContent = await invoke<string>('pick_markdown_file');
-      if (mdContent) {
-        const jsonStr = convertMarkdownToTipTapJson(mdContent);
-        setContent(jsonStr);
-      }
-    } catch (err) {
-      console.warn('Import failed:', err);
+    const mdContent = await listsService.pickMarkdownFile();
+    if (mdContent) {
+      const jsonStr = convertMarkdownToTipTapJson(mdContent);
+      setContent(jsonStr);
     }
   };
 
   const handleExport = async () => {
     try {
       const exportText = convertTipTapJsonToMarkdown(content);
-      await invoke('save_markdown_file', {
-        defaultName: `${title || '未命名笔记'}.md`,
-        content: exportText,
-      });
+      await listsService.saveMarkdownFile(`${title || '未命名笔记'}.md`, exportText);
     } catch (err) {
-      console.warn('Export failed:', err);
+      // Cancellation surfaces as an error from the backend; already logged by `call`.
     }
   };
 

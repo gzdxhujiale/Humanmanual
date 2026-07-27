@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { call } from '../../lib/tauriClient';
 import type { Template } from './templateTypes';
 
 /**
@@ -6,20 +6,10 @@ import type { Template } from './templateTypes';
  * Concentrates Tauri IPC calls for template persistence.
  */
 
-export async function upsertTemplate(template: Template): Promise<void> {
-  try {
-    await invoke('list_upsert_template', { template });
-  } catch (e) {
-    console.error('[templateService] upsert_template failed:', e);
-    throw e;
-  }
+export function upsertTemplate(template: Template): Promise<void> {
+  return call('list_upsert_template', { template });
 }
 
-export async function deleteTemplate(id: string): Promise<void> {
-  try {
-    await invoke('list_delete_template', { id });
-  } catch (e) {
-    console.error('[templateService] delete_template failed:', e);
-    throw e;
-  }
+export function deleteTemplate(id: string): Promise<void> {
+  return call('list_delete_template', { id });
 }
