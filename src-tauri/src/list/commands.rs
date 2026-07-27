@@ -1,13 +1,16 @@
 // Load + CRUD commands for the lists module.
-// Deletes here are soft-deletes (deleted_at) or local-only hard deletes; cloud
-// propagation happens through push_to_tidb, so no sync_queue entries are needed.
+// Soft-deletes (deleted_at) propagate to the cloud through push_to_tidb's
+// upsert pass. HARD deletes on synced tables (list_templates, list_note_groups)
+// must go through queue_and_sync_delete, otherwise pull_from_tidb resurrects
+// the deleted rows on next startup.
 
 use sqlx::{Row, SqlitePool};
 use tauri::State;
 
 use super::types::*;
+use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::{now_iso, now_ms};
+use crate::sync::{now_iso, now_ms, queue_and_sync_delete};
 
 // ── Load all ──
 
@@ -188,7 +191,7 @@ pub async fn list_upsert_list(list: ListList, pool: State<'_, SqlitePool>) -> Ap
 }
 
 #[tauri::command]
-pub async fn list_delete_list(id: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_delete_list(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     // Soft-delete list
     sqlx::query("UPDATE list_lists SET deleted_at = ? WHERE id = ?")
@@ -198,10 +201,20 @@ pub async fn list_delete_list(id: String, pool: State<'_, SqlitePool>) -> AppRes
     sqlx::query("UPDATE list_notes SET deleted_at = ? WHERE list_id = ? AND deleted_at IS NULL")
         .bind(&now).bind(&id)
         .execute(&*pool).await?;
-    // Delete associated groups
+    // Hard-delete associated groups (synced table: queue each id so the cloud
+    // copy is removed too, otherwise pull_from_tidb restores them)
+    let group_rows = sqlx::query("SELECT id FROM list_note_groups WHERE list_id = ?")
+        .bind(&id)
+        .fetch_all(&*pool).await?;
     sqlx::query("DELETE FROM list_note_groups WHERE list_id = ?")
         .bind(&id)
         .execute(&*pool).await?;
+    for row in &group_rows {
+        let gid: String = row.try_get("id").unwrap_or_default();
+        if !gid.is_empty() {
+            queue_and_sync_delete(&pool, &tidb_state, "list_note_groups", &gid).await;
+        }
+    }
     Ok(())
 }
 
@@ -394,7 +407,7 @@ pub async fn list_upsert_group(group: ListNoteGroup, pool: State<'_, SqlitePool>
 }
 
 #[tauri::command]
-pub async fn list_delete_group(id: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_delete_group(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     // Move notes in this group to ungrouped
     sqlx::query("UPDATE list_notes SET group_id = NULL, updated_at = ? WHERE group_id = ? AND deleted_at IS NULL")
@@ -404,6 +417,7 @@ pub async fn list_delete_group(id: String, pool: State<'_, SqlitePool>) -> AppRe
     sqlx::query("DELETE FROM list_note_groups WHERE id = ?")
         .bind(&id)
         .execute(&*pool).await?;
+    queue_and_sync_delete(&pool, &tidb_state, "list_note_groups", &id).await;
     Ok(())
 }
 
@@ -427,9 +441,10 @@ pub async fn list_upsert_template(template: ListTemplate, pool: State<'_, Sqlite
 }
 
 #[tauri::command]
-pub async fn list_delete_template(id: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_delete_template(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     sqlx::query("DELETE FROM list_templates WHERE id = ?")
         .bind(&id)
         .execute(&*pool).await?;
+    queue_and_sync_delete(&pool, &tidb_state, "list_templates", &id).await;
     Ok(())
 }

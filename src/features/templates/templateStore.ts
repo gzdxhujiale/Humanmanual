@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Template, DEFAULT_TEMPLATES } from './templateTypes';
 import * as templateService from './templateService';
+import { logError } from '../../lib/logger';
 
 function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -26,9 +27,8 @@ export const useTemplateStore = create<TemplateStoreState>((set, get) => ({
   },
 
   setTemplates: (templates: Template[]) => {
-    if (templates.length > 0) {
-      set({ templates, initialized: true });
-    }
+    // 空数组是合法状态（用户删光了模板），不能忽略
+    set({ templates, initialized: true });
   },
 
   addTemplate: (name, content) => {
@@ -40,7 +40,7 @@ export const useTemplateStore = create<TemplateStoreState>((set, get) => ({
     };
 
     set({ templates: [...templates, newTemplate] });
-    templateService.upsertTemplate(newTemplate).catch(() => {});
+    templateService.upsertTemplate(newTemplate).catch(err => logError('templateStore', 'failed to persist new template', err));
     return newTemplate;
   },
 
@@ -51,13 +51,13 @@ export const useTemplateStore = create<TemplateStoreState>((set, get) => ({
       const newTemplates = [...templates];
       newTemplates[index] = { ...newTemplates[index], ...updates };
       set({ templates: newTemplates });
-      templateService.upsertTemplate(newTemplates[index]).catch(() => {});
+      templateService.upsertTemplate(newTemplates[index]).catch(err => logError('templateStore', 'failed to persist template update', err));
     }
   },
 
   deleteTemplate: (id) => {
     const templates = get().templates;
     set({ templates: templates.filter(t => t.id !== id) });
-    templateService.deleteTemplate(id).catch(() => {});
+    templateService.deleteTemplate(id).catch(err => logError('templateStore', 'failed to delete template from DB', err));
   },
 }));
