@@ -668,6 +668,7 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
     return taskList.map(task => {
       const isHovered = dragOverTaskId === task.id;
       const isExpired = task.deadline && task.deadline < now && !task.completed;
+      const hasContent = !checkJsonEmpty(task.description);
       return (
         <div 
           key={task.id} 
@@ -735,18 +736,21 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
                 已过期
               </span>
             )}
-            {task.description && (
-              <span className="tm-task-meta" style={{ display: 'flex', alignItems: 'center', flexShrink: 0, color: 'var(--text-muted)' }}>
-                <AlignLeft size={12} />
+          </div>
+          <div className="tm-task-right-action">
+            {hasContent && (
+              <span className="tm-task-detail-icon" title="包含任务详情">
+                <AlignLeft size={14} />
               </span>
             )}
+            <button 
+              className="icon-button tm-task-delete-btn" 
+              onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+              title="删除任务"
+            >
+              <X size={14} />
+            </button>
           </div>
-          <button 
-            className="icon-button tm-task-delete-btn" 
-            onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
-          >
-            <X size={14} />
-          </button>
         </div>
       );
     });

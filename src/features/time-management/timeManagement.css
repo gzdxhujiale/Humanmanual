@@ -574,9 +574,40 @@
   color: var(--text-faint);
 }
 
+/* Task Right Action Slot & Detail Icon */
+.tm-task-right-action {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tm-task-detail-icon {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 1;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.tm-task-item-minimal:hover .tm-task-detail-icon {
+  opacity: 0;
+}
+
+.tm-task-right-action .tm-task-delete-btn {
+  position: absolute;
+}
+
 /* Delete Button on Hover */
 .tm-task-delete-btn {
   opacity: 0;
+  pointer-events: none;
   color: var(--text-faint);
   padding: 4px;
   transition: opacity 0.2s, color 0.2s;
@@ -591,6 +622,7 @@
 .tm-scheduled-task:hover .tm-task-delete-btn,
 .tm-backlog-task:hover .tm-task-delete-btn {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* Modal Styles */
