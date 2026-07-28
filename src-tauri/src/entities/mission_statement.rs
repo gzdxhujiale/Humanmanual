@@ -7,6 +7,7 @@ pub struct Model {
     pub id: String,
     pub content: String,
     pub updated_at: chrono::NaiveDateTime,
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

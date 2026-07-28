@@ -10,7 +10,7 @@ use tauri::State;
 use super::types::*;
 use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::{now_iso, now_ms, queue_and_sync_delete};
+use crate::sync::{now_iso, now_ms};
 
 // ── Load all ──
 
@@ -59,7 +59,7 @@ pub async fn list_load_all(pool: State<'_, SqlitePool>) -> AppResult<ListAllData
 
     // Note groups
     let group_rows = sqlx::query(
-        "SELECT id, list_id, name, sort_order FROM list_note_groups ORDER BY sort_order"
+        "SELECT id, list_id, name, sort_order FROM list_note_groups WHERE deleted_at IS NULL ORDER BY sort_order"
     ).fetch_all(&*pool).await?;
 
     let note_groups = group_rows
@@ -97,7 +97,7 @@ pub async fn list_load_all(pool: State<'_, SqlitePool>) -> AppResult<ListAllData
         .collect();
 
     // Templates
-    let tpl_rows = sqlx::query("SELECT id, name, content FROM list_templates")
+    let tpl_rows = sqlx::query("SELECT id, name, content FROM list_templates WHERE deleted_at IS NULL")
         .fetch_all(&*pool)
         .await?;
 
@@ -116,7 +116,7 @@ pub async fn list_load_all(pool: State<'_, SqlitePool>) -> AppResult<ListAllData
 // ── Folder CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_folder(folder: ListFolder, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_upsert_folder(folder: ListFolder, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if folder.is_pinned { 1 } else { 0 };
     sqlx::query(
@@ -131,40 +131,46 @@ pub async fn list_upsert_folder(folder: ListFolder, pool: State<'_, SqlitePool>)
     .bind(&now)
     .bind(&now)
     .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_folders", &folder.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_folder(id: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_delete_folder(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     // Soft-delete folder
-    sqlx::query("UPDATE list_folders SET deleted_at = ? WHERE id = ?")
-        .bind(&now).bind(&id)
+    sqlx::query("UPDATE list_folders SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&now).bind(&id)
         .execute(&*pool).await?;
     // Unlink lists from folder
     sqlx::query("UPDATE list_lists SET folder_id = NULL, updated_at = ? WHERE folder_id = ?")
         .bind(&now).bind(&id)
         .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_folders", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_folders(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_reorder_folders(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
     for (id, order) in &items {
         sqlx::query("UPDATE list_folders SET sort_order = ?, updated_at = ? WHERE id = ?")
             .bind(order).bind(&now).bind(id)
             .execute(&mut *tx).await?;
+        crate::sync::record_outbox_event(pool.inner(), "list_folders", id, "upsert").await;
     }
     tx.commit().await?;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── List CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_list(list: ListList, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_upsert_list(list: ListList, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if list.is_pinned { 1 } else { 0 };
     sqlx::query(
@@ -187,6 +193,8 @@ pub async fn list_upsert_list(list: ListList, pool: State<'_, SqlitePool>) -> Ap
     .bind(&now)
     .bind(&now)
     .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_lists", &list.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -201,47 +209,43 @@ pub async fn list_delete_list(id: String, pool: State<'_, SqlitePool>, tidb_stat
     sqlx::query("UPDATE list_notes SET deleted_at = ? WHERE list_id = ? AND deleted_at IS NULL")
         .bind(&now).bind(&id)
         .execute(&*pool).await?;
-    // Hard-delete associated groups (synced table: queue each id so the cloud
-    // copy is removed too, otherwise pull_from_tidb restores them)
-    let group_rows = sqlx::query("SELECT id FROM list_note_groups WHERE list_id = ?")
-        .bind(&id)
-        .fetch_all(&*pool).await?;
-    sqlx::query("DELETE FROM list_note_groups WHERE list_id = ?")
-        .bind(&id)
+    // Soft-delete associated groups
+    sqlx::query("UPDATE list_note_groups SET deleted_at = ?, updated_at = ? WHERE list_id = ? AND deleted_at IS NULL")
+        .bind(&now).bind(&now).bind(&id)
         .execute(&*pool).await?;
-    for row in &group_rows {
-        let gid: String = row.try_get("id").unwrap_or_default();
-        if !gid.is_empty() {
-            queue_and_sync_delete(&pool, &tidb_state, "list_note_groups", &gid).await;
-        }
-    }
+    crate::sync::record_outbox_event(pool.inner(), "list_lists", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_lists(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_reorder_lists(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
     for (id, order) in &items {
         sqlx::query("UPDATE list_lists SET sort_order = ?, updated_at = ? WHERE id = ?")
             .bind(order).bind(&now).bind(id)
             .execute(&mut *tx).await?;
+        crate::sync::record_outbox_event(pool.inner(), "list_lists", id, "upsert").await;
     }
     tx.commit().await?;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_move_list(list_id: String, folder_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_move_list(list_id: String, folder_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     sqlx::query("UPDATE list_lists SET folder_id = ?, sort_order = ?, updated_at = ? WHERE id = ?")
         .bind(&folder_id).bind(sort_order).bind(&now).bind(&list_id)
         .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_lists", &list_id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_duplicate_list(source_id: String, new_list: ListList, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_duplicate_list(source_id: String, new_list: ListList, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let now_ms_val = now_ms();
     let mut tx = pool.begin().await?;
@@ -324,13 +328,14 @@ pub async fn list_duplicate_list(source_id: String, new_list: ListList, pool: St
     }
 
     tx.commit().await?;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── Note CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_note(note: ListNote, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_upsert_note(note: ListNote, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if note.is_pinned { 1 } else { 0 };
     sqlx::query(
@@ -352,44 +357,52 @@ pub async fn list_upsert_note(note: ListNote, pool: State<'_, SqlitePool>) -> Ap
     .bind(&now)
     .bind(&now)
     .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_notes", &note.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_note(id: String, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_delete_note(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE list_notes SET deleted_at = ? WHERE id = ?")
-        .bind(&now).bind(&id)
+    sqlx::query("UPDATE list_notes SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&now).bind(&id)
         .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_notes", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     sqlx::query("UPDATE list_notes SET list_id = ?, group_id = ?, sort_order = ?, updated_at = ? WHERE id = ?")
         .bind(&list_id).bind(&group_id).bind(sort_order).bind(&now).bind(&note_id)
         .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_notes", &note_id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_notes(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_reorder_notes(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
     for (id, order) in &items {
         sqlx::query("UPDATE list_notes SET sort_order = ?, updated_at = ? WHERE id = ?")
             .bind(order).bind(&now).bind(id)
             .execute(&mut *tx).await?;
+        crate::sync::record_outbox_event(pool.inner(), "list_notes", id, "upsert").await;
     }
     tx.commit().await?;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── Note Group CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_group(group: ListNoteGroup, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_upsert_group(group: ListNoteGroup, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     sqlx::query(
         "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at)
@@ -403,6 +416,8 @@ pub async fn list_upsert_group(group: ListNoteGroup, pool: State<'_, SqlitePool>
     .bind(&now)
     .bind(&now)
     .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_note_groups", &group.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -413,18 +428,19 @@ pub async fn list_delete_group(id: String, pool: State<'_, SqlitePool>, tidb_sta
     sqlx::query("UPDATE list_notes SET group_id = NULL, updated_at = ? WHERE group_id = ? AND deleted_at IS NULL")
         .bind(&now).bind(&id)
         .execute(&*pool).await?;
-    // Hard-delete the group
-    sqlx::query("DELETE FROM list_note_groups WHERE id = ?")
-        .bind(&id)
+    // Soft-delete the group
+    sqlx::query("UPDATE list_note_groups SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&now).bind(&id)
         .execute(&*pool).await?;
-    queue_and_sync_delete(&pool, &tidb_state, "list_note_groups", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "list_note_groups", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── Template CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_template(template: ListTemplate, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_upsert_template(template: ListTemplate, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     sqlx::query(
         "INSERT INTO list_templates (id, name, content, created_at, updated_at)
@@ -437,14 +453,18 @@ pub async fn list_upsert_template(template: ListTemplate, pool: State<'_, Sqlite
     .bind(&now)
     .bind(&now)
     .execute(&*pool).await?;
+    crate::sync::record_outbox_event(pool.inner(), "list_templates", &template.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
 pub async fn list_delete_template(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
-    sqlx::query("DELETE FROM list_templates WHERE id = ?")
-        .bind(&id)
+    let now = now_iso();
+    sqlx::query("UPDATE list_templates SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&now).bind(&id)
         .execute(&*pool).await?;
-    queue_and_sync_delete(&pool, &tidb_state, "list_templates", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "list_templates", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }

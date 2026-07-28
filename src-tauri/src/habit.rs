@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::{now_iso, queue_and_sync_delete};
+use crate::sync::now_iso;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Habit {
@@ -66,9 +66,7 @@ pub struct HabitData {
 pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> AppResult<HabitData> {
     let habits_rows = sqlx::query(
         r#"
-        SELECT id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at
-        FROM habits
-        ORDER BY created_at DESC
+        SELECT id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at FROM habits WHERE deleted_at IS NULL ORDER BY created_at ASC
         "#
     )
     .fetch_all(&*pool)
@@ -108,7 +106,7 @@ pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> AppResult<HabitData>
     let checkins_rows = sqlx::query(
         r#"
         SELECT id, habit_id, date, completed, created_at, updated_at
-        FROM habit_checkins
+        FROM habit_checkins WHERE deleted_at IS NULL
         "#
     )
     .fetch_all(&*pool)
@@ -139,7 +137,7 @@ pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> AppResult<HabitData>
 }
 
 #[tauri::command]
-pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) -> AppResult<Habit> {
+pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<Habit> {
     let id = Uuid::new_v4().to_string();
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
@@ -168,7 +166,9 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
     .execute(&*pool)
     .await?;
 
-    Ok(Habit {
+    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "upsert").await;
+
+    let result = Ok(Habit {
         id,
         name: name_val,
         frequency: payload.frequency,
@@ -181,11 +181,14 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>) ->
         auto_popup_log: auto_popup_log_val != 0,
         created_at: now.clone(),
         updated_at: now,
-    })
+    });
+
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    result
 }
 
 #[tauri::command]
-pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
     let reminder_val = payload.check_in_time.or(payload.reminder);
@@ -214,10 +217,12 @@ pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, Sql
     .bind(&reminder_val)
     .bind(auto_popup_log_val)
     .bind(&now)
-    .bind(id)
+    .bind(&id)
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -227,26 +232,23 @@ pub async fn habit_delete(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM habit_checkins WHERE habit_id = ?")
+    let now = now_iso();
+    sqlx::query("UPDATE habit_checkins SET deleted_at = ?, updated_at = ? WHERE habit_id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    sqlx::query("DELETE FROM habits WHERE id = ?")
+    sqlx::query("UPDATE habits SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    // Remote cleanup runs in the background so the UI is not blocked
-    let pool_clone = pool.inner().clone();
-    let tidb_state_clone = tidb_state.inner().clone();
-    tauri::async_runtime::spawn(async move {
-        // Remote cascade first (check-ins), then the shared delete flow
-        if let Some(ref mysql) = *tidb_state_clone.0.read().await {
-            let _ = sqlx::query("DELETE FROM habit_checkins WHERE habit_id = ?").bind(&id).execute(mysql).await;
-        }
-        queue_and_sync_delete(&pool_clone, &tidb_state_clone, "habits", &id).await;
-    });
+    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }
@@ -268,7 +270,7 @@ pub async fn habit_toggle_checkin(
     let _ = sqlx::query(
         "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at"
+         ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at, deleted_at = NULL"
     )
     .bind(&checkin_id)
     .bind(&habit_id)
@@ -279,8 +281,10 @@ pub async fn habit_toggle_checkin(
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "habit_checkins", &checkin_id, "upsert").await;
+
     // 2. Fetch updated row
-    let row = sqlx::query("SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE habit_id = ? AND date = ?")
+    let row = sqlx::query("SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL AND habit_id = ? AND date = ?")
         .bind(&habit_id)
         .bind(&date)
         .fetch_one(&*pool)

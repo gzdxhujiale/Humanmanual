@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::{now_iso, now_ms, queue_and_sync_delete};
+use crate::sync::{now_iso, now_ms};
 
 #[derive(Serialize, Deserialize, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +20,7 @@ pub struct DailyReviewRow {
 #[tauri::command]
 pub async fn daily_review_load_all(pool: State<'_, SqlitePool>) -> AppResult<Vec<DailyReviewRow>> {
     let rows = sqlx::query(
-        "SELECT id, date, content, rating, created_at, updated_at FROM daily_reviews"
+        "SELECT id, date, content, rating, created_at, updated_at FROM daily_reviews WHERE deleted_at IS NULL"
     )
     .fetch_all(&*pool)
     .await?;
@@ -59,7 +59,7 @@ pub async fn daily_review_load_all(pool: State<'_, SqlitePool>) -> AppResult<Vec
 }
 
 #[tauri::command]
-pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let created_at_value = review.created_at.unwrap_or_else(now_ms);
 
     // Convert ms timestamp to ISO string for SQLite storage
@@ -85,6 +85,8 @@ pub async fn daily_review_save(review: DailyReviewRow, pool: State<'_, SqlitePoo
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "daily_reviews", &review.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -94,12 +96,16 @@ pub async fn daily_review_delete(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM daily_reviews WHERE id = ?")
+    let now = now_iso();
+    sqlx::query("UPDATE daily_reviews SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    queue_and_sync_delete(&pool, &tidb_state, "daily_reviews", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "daily_reviews", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }

@@ -16,6 +16,8 @@ pub struct Model {
     pub description: Option<String>,
     pub deadline: Option<i64>,
     pub reminder: Option<String>,
+    pub updated_at: chrono::NaiveDateTime,
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

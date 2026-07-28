@@ -4,8 +4,8 @@
 //   - SYNCED_TABLES:         the tables two-way synced between the two
 // When adding a table, update all three lists here.
 
-use futures::future::join_all;
-use sqlx::{MySqlPool, SqlitePool};
+use std::collections::HashSet;
+use sqlx::{MySqlPool, SqlitePool, Row};
 
 /// Tables mirrored between local SQLite and remote TiDB. Used by the
 /// sync_queue DELETE flush as a whitelist and by the pull/push sync.
@@ -17,16 +17,19 @@ pub const SYNCED_TABLES: &[&str] = &[
 ];
 
 const DDL_STATEMENTS: &[&str] = &[
-    // ── Time Management ──
-    "CREATE TABLE IF NOT EXISTS time_management_roles (
+    // ── 1. Mission Roles (Parent Table) ──
+    "CREATE TABLE IF NOT EXISTS mission_roles (
         id VARCHAR(36) NOT NULL,
-        name VARCHAR(255) NOT NULL,
-        color VARCHAR(50),
-        created_at BIGINT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        name VARCHAR(100) NOT NULL,
+        icon VARCHAR(20) NOT NULL DEFAULT '',
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at DATETIME(3) NOT NULL,
+        updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 2. Time Management Tasks (references mission_roles) ──
     "CREATE TABLE IF NOT EXISTS time_management_tasks (
         id VARCHAR(36) NOT NULL,
         title VARCHAR(255) NOT NULL,
@@ -40,11 +43,13 @@ const DDL_STATEMENTS: &[&str] = &[
         description TEXT NULL,
         deadline BIGINT NULL,
         reminder VARCHAR(100) NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (id)
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        deleted_at DATETIME(3) NULL,
+        PRIMARY KEY (id),
+        CONSTRAINT fk_tm_tasks_role FOREIGN KEY (role_id) REFERENCES mission_roles(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── Daily Review ──
+    // ── 3. Daily Review ──
     "CREATE TABLE IF NOT EXISTS daily_reviews (
         id VARCHAR(64) NOT NULL,
         date DATE NOT NULL,
@@ -52,11 +57,12 @@ const DDL_STATEMENTS: &[&str] = &[
         rating INT,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
         UNIQUE KEY uk_date (date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── List module ──
+    // ── 4. List Folders (Parent Table) ──
     "CREATE TABLE IF NOT EXISTS list_folders (
         id VARCHAR(64) NOT NULL,
         name VARCHAR(255) NOT NULL,
@@ -68,6 +74,7 @@ const DDL_STATEMENTS: &[&str] = &[
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 5. List Lists (references list_folders) ──
     "CREATE TABLE IF NOT EXISTS list_lists (
         id VARCHAR(64) NOT NULL,
         name VARCHAR(255) NOT NULL,
@@ -81,9 +88,11 @@ const DDL_STATEMENTS: &[&str] = &[
         updated_at DATETIME(3) NOT NULL,
         deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
-        KEY idx_folder_order (folder_id, sort_order)
+        KEY idx_folder_order (folder_id, sort_order),
+        CONSTRAINT fk_list_lists_folder FOREIGN KEY (folder_id) REFERENCES list_folders(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 6. List Note Groups (references list_lists) ──
     "CREATE TABLE IF NOT EXISTS list_note_groups (
         id VARCHAR(64) NOT NULL,
         list_id VARCHAR(64) NOT NULL,
@@ -91,10 +100,13 @@ const DDL_STATEMENTS: &[&str] = &[
         sort_order INT NOT NULL DEFAULT 0,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
-        KEY idx_list_order (list_id, sort_order)
+        KEY idx_list_order (list_id, sort_order),
+        CONSTRAINT fk_note_groups_list FOREIGN KEY (list_id) REFERENCES list_lists(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 7. List Notes (references list_lists and list_note_groups) ──
     "CREATE TABLE IF NOT EXISTS list_notes (
         id VARCHAR(64) NOT NULL,
         list_id VARCHAR(64) NOT NULL,
@@ -108,19 +120,23 @@ const DDL_STATEMENTS: &[&str] = &[
         deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
         KEY idx_list_group_order (list_id, group_id, sort_order),
-        KEY idx_list_pinned (list_id, is_pinned)
+        KEY idx_list_pinned (list_id, is_pinned),
+        CONSTRAINT fk_list_notes_list FOREIGN KEY (list_id) REFERENCES list_lists(id) ON DELETE CASCADE,
+        CONSTRAINT fk_list_notes_group FOREIGN KEY (group_id) REFERENCES list_note_groups(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 8. List Templates ──
     "CREATE TABLE IF NOT EXISTS list_templates (
         id VARCHAR(64) NOT NULL,
         name VARCHAR(255) NOT NULL,
         content LONGTEXT NOT NULL,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── App preferences ──
+    // ── 9. App preferences ──
     "CREATE TABLE IF NOT EXISTS app_preferences (
         pref_key VARCHAR(255) NOT NULL,
         pref_value TEXT NOT NULL,
@@ -128,24 +144,16 @@ const DDL_STATEMENTS: &[&str] = &[
         PRIMARY KEY (pref_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── Mission module ──
+    // ── 10. Mission Statement ──
     "CREATE TABLE IF NOT EXISTS mission_statement (
         id VARCHAR(36) NOT NULL,
         content LONGTEXT NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    "CREATE TABLE IF NOT EXISTS mission_roles (
-        id VARCHAR(36) NOT NULL,
-        name VARCHAR(100) NOT NULL,
-        icon VARCHAR(20) NOT NULL DEFAULT '',
-        sort_order INT NOT NULL DEFAULT 0,
-        created_at DATETIME(3) NOT NULL,
-        updated_at DATETIME(3) NOT NULL,
-        PRIMARY KEY (id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-
+    // ── 11. Mission Goals (references mission_roles) ──
     "CREATE TABLE IF NOT EXISTS mission_goals (
         id VARCHAR(36) NOT NULL,
         role_id VARCHAR(36) NOT NULL,
@@ -157,11 +165,13 @@ const DDL_STATEMENTS: &[&str] = &[
         sort_order INT NOT NULL DEFAULT 0,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
-        KEY idx_role_order (role_id, sort_order)
+        KEY idx_role_order (role_id, sort_order),
+        CONSTRAINT fk_mission_goals_role FOREIGN KEY (role_id) REFERENCES mission_roles(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── Habit Tracking ──
+    // ── 12. Habits (Parent Table) ──
     "CREATE TABLE IF NOT EXISTS habits (
         id VARCHAR(64) NOT NULL,
         name VARCHAR(255) NOT NULL,
@@ -174,9 +184,11 @@ const DDL_STATEMENTS: &[&str] = &[
         auto_popup_log TINYINT(1) NOT NULL DEFAULT 0,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 13. Habit Checkins (references habits) ──
     "CREATE TABLE IF NOT EXISTS habit_checkins (
         id VARCHAR(64) NOT NULL,
         habit_id VARCHAR(64) NOT NULL,
@@ -184,12 +196,14 @@ const DDL_STATEMENTS: &[&str] = &[
         completed TINYINT(1) NOT NULL DEFAULT 1,
         created_at DATETIME(3) NOT NULL,
         updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id),
         UNIQUE KEY uk_habit_date (habit_id, date),
-        KEY idx_habit_id (habit_id)
+        KEY idx_habit_id (habit_id),
+        CONSTRAINT fk_habit_checkins_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-    // ── Pomodoro Focus ──
+    // ── 14. Pomodoro Focus (references time_management_tasks) ──
     "CREATE TABLE IF NOT EXISTS pomodoro_records (
         id VARCHAR(64) NOT NULL,
         mode VARCHAR(32) NOT NULL,
@@ -203,9 +217,13 @@ const DDL_STATEMENTS: &[&str] = &[
         task_id VARCHAR(64) NULL,
         linked_target TEXT NULL,
         created_at DATETIME(3) NOT NULL,
-        PRIMARY KEY (id)
+        updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
+        PRIMARY KEY (id),
+        CONSTRAINT fk_pomodoro_records_task FOREIGN KEY (task_id) REFERENCES time_management_tasks(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+    // ── 15. Pomodoro Favorites ──
     "CREATE TABLE IF NOT EXISTS pomodoro_favorites (
         id VARCHAR(64) NOT NULL,
         name VARCHAR(255) NOT NULL,
@@ -216,60 +234,97 @@ const DDL_STATEMENTS: &[&str] = &[
         linked_target TEXT NULL,
         is_archived TINYINT(1) NOT NULL DEFAULT 0,
         created_at DATETIME(3) NOT NULL,
+        updated_at DATETIME(3) NOT NULL,
+        deleted_at DATETIME(3) NULL,
         PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+    // ── 16. Schema Migrations Metadata ──
+    "CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INT NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 ];
 
-/// 并行执行所有 DDL，将 12 次串行网络往返压缩为 1 轮并发。
-pub async fn ensure_tables(pool: &MySqlPool) -> Result<(), sqlx::Error> {
-    let futs: Vec<_> = DDL_STATEMENTS
-        .iter()
-        .map(|sql| sqlx::query(*sql).execute(pool))
-        .collect();
+// ── Versioned Schema Migrations ──
 
-    let results = join_all(futs).await;
-
-    // 收集所有错误
-    let errors: Vec<_> = results
-        .into_iter()
-        .filter_map(|r| r.err())
-        .collect();
-
-    // Migrations for newly added columns in habits
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN frequency VARCHAR(50) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN goal VARCHAR(50) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN start_date VARCHAR(20) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN duration VARCHAR(50) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN category VARCHAR(50) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN reminder VARCHAR(50) NULL").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE habits ADD COLUMN auto_popup_log TINYINT(1) NOT NULL DEFAULT 0").execute(pool).await;
-
-    // Migration for reminder column in time_management_tasks
-    let _ = sqlx::query("ALTER TABLE time_management_tasks ADD COLUMN reminder VARCHAR(100) NULL").execute(pool).await;
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        // 返回第一个错误，但日志记录全部
-        for e in &errors {
-            eprintln!("Schema creation error: {}", e);
-        }
-        Err(errors.into_iter().next().unwrap())
-    }
+pub struct MigrationStep {
+    pub version: i32,
+    pub name: &'static str,
+    pub sql: &'static str,
 }
 
-// ── Local SQLite schema (mirror of the tables above, plus sync_queue) ──
+const COMMON_MIGRATIONS: &[MigrationStep] = &[
+    MigrationStep { version: 1, name: "habits_frequency", sql: "ALTER TABLE habits ADD COLUMN frequency VARCHAR(50) NULL" },
+    MigrationStep { version: 2, name: "habits_goal", sql: "ALTER TABLE habits ADD COLUMN goal VARCHAR(50) NULL" },
+    MigrationStep { version: 3, name: "habits_start_date", sql: "ALTER TABLE habits ADD COLUMN start_date VARCHAR(20) NULL" },
+    MigrationStep { version: 4, name: "habits_duration", sql: "ALTER TABLE habits ADD COLUMN duration VARCHAR(50) NULL" },
+    MigrationStep { version: 5, name: "habits_category", sql: "ALTER TABLE habits ADD COLUMN category VARCHAR(50) NULL" },
+    MigrationStep { version: 6, name: "habits_reminder", sql: "ALTER TABLE habits ADD COLUMN reminder VARCHAR(50) NULL" },
+    MigrationStep { version: 7, name: "habits_auto_popup", sql: "ALTER TABLE habits ADD COLUMN auto_popup_log TINYINT(1) NOT NULL DEFAULT 0" },
+    MigrationStep { version: 8, name: "tm_reminder", sql: "ALTER TABLE time_management_tasks ADD COLUMN reminder VARCHAR(100) NULL" },
+    MigrationStep { version: 9, name: "pomodoro_fav_updated_at", sql: "ALTER TABLE pomodoro_favorites ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)" },
+    MigrationStep { version: 10, name: "tm_deleted_at", sql: "ALTER TABLE time_management_tasks ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 11, name: "daily_reviews_deleted_at", sql: "ALTER TABLE daily_reviews ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 12, name: "list_note_groups_deleted_at", sql: "ALTER TABLE list_note_groups ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 13, name: "list_templates_deleted_at", sql: "ALTER TABLE list_templates ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 14, name: "mission_statement_deleted_at", sql: "ALTER TABLE mission_statement ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 15, name: "mission_roles_deleted_at", sql: "ALTER TABLE mission_roles ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 16, name: "mission_goals_deleted_at", sql: "ALTER TABLE mission_goals ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 17, name: "habits_deleted_at", sql: "ALTER TABLE habits ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 18, name: "habit_checkins_deleted_at", sql: "ALTER TABLE habit_checkins ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 19, name: "pomodoro_records_updated_at", sql: "ALTER TABLE pomodoro_records ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)" },
+    MigrationStep { version: 20, name: "pomodoro_records_deleted_at", sql: "ALTER TABLE pomodoro_records ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 21, name: "pomodoro_favorites_deleted_at", sql: "ALTER TABLE pomodoro_favorites ADD COLUMN deleted_at DATETIME(3) NULL" },
+    MigrationStep { version: 22, name: "cleanup_orphan_notes", sql: "DELETE FROM list_notes WHERE list_id NOT IN (SELECT id FROM list_lists)" },
+    MigrationStep { version: 23, name: "cleanup_orphan_goals", sql: "DELETE FROM mission_goals WHERE role_id NOT IN (SELECT id FROM mission_roles)" },
+    MigrationStep { version: 24, name: "cleanup_orphan_checkins", sql: "DELETE FROM habit_checkins WHERE habit_id NOT IN (SELECT id FROM habits)" },
+    MigrationStep { version: 25, name: "cleanup_orphan_groups", sql: "DELETE FROM list_note_groups WHERE list_id NOT IN (SELECT id FROM list_lists)" },
+    MigrationStep { version: 26, name: "cleanup_orphan_note_groups_ref", sql: "UPDATE list_notes SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM list_note_groups)" },
+];
+
+pub async fn ensure_tables(pool: &MySqlPool) -> Result<(), sqlx::Error> {
+    for sql in DDL_STATEMENTS {
+        if let Err(e) = sqlx::query(*sql).execute(pool).await {
+            eprintln!("[MySQL DDL] table setup warning/notice: {}", e);
+        }
+    }
+
+    let applied_rows = sqlx::query("SELECT version FROM schema_migrations").fetch_all(pool).await.unwrap_or_default();
+    let applied_versions: HashSet<i32> = applied_rows.into_iter().filter_map(|r| r.try_get("version").ok()).collect();
+
+    for m in COMMON_MIGRATIONS {
+        if !applied_versions.contains(&m.version) {
+            let _ = sqlx::query(m.sql).execute(pool).await;
+            let _ = sqlx::query("INSERT IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP(3))")
+                .bind(m.version)
+                .bind(m.name)
+                .execute(pool)
+                .await;
+        }
+    }
+    let _ = sqlx::query("ALTER TABLE time_management_tasks MODIFY COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)").execute(pool).await;
+    let _ = sqlx::query("DELETE FROM list_notes WHERE list_id NOT IN (SELECT id FROM list_lists)").execute(pool).await;
+    let _ = sqlx::query("UPDATE list_notes SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM list_note_groups)").execute(pool).await;
+    Ok(())
+}
+
+// ── Local SQLite schema (mirror of the tables above, plus sync_queue & indexes) ──
 
 const SQLITE_DDL_STATEMENTS: &[&str] = &[
-    // ── Time Management ──
-    "CREATE TABLE IF NOT EXISTS time_management_roles (
+    // ── 1. Mission Roles (Parent Table) ──
+    "CREATE TABLE IF NOT EXISTS mission_roles (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
-        color TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at TEXT DEFAULT (datetime('now'))
+        icon TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL
     )",
 
+    // ── 2. Time Management Tasks (references mission_roles) ──
     "CREATE TABLE IF NOT EXISTS time_management_tasks (
         id TEXT NOT NULL PRIMARY KEY,
         title TEXT NOT NULL,
@@ -283,10 +338,12 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         description TEXT NULL,
         deadline INTEGER NULL,
         reminder TEXT NULL,
-        updated_at TEXT DEFAULT (datetime('now'))
+        updated_at TEXT DEFAULT (datetime('now')),
+        deleted_at TEXT NULL,
+        FOREIGN KEY (role_id) REFERENCES mission_roles(id) ON DELETE SET NULL
     )",
 
-    // ── Daily Review ──
+    // ── 3. Daily Review ──
     "CREATE TABLE IF NOT EXISTS daily_reviews (
         id TEXT NOT NULL PRIMARY KEY,
         date TEXT NOT NULL,
@@ -294,10 +351,11 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         rating INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL,
         UNIQUE (date)
     )",
 
-    // ── List module ──
+    // ── 4. List Folders (Parent Table) ──
     "CREATE TABLE IF NOT EXISTS list_folders (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -308,6 +366,7 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         deleted_at TEXT NULL
     )",
 
+    // ── 5. List Lists (references list_folders) ──
     "CREATE TABLE IF NOT EXISTS list_lists (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -319,18 +378,23 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        deleted_at TEXT NULL
+        deleted_at TEXT NULL,
+        FOREIGN KEY (folder_id) REFERENCES list_folders(id) ON DELETE SET NULL
     )",
 
+    // ── 6. List Note Groups (references list_lists) ──
     "CREATE TABLE IF NOT EXISTS list_note_groups (
         id TEXT NOT NULL PRIMARY KEY,
         list_id TEXT NOT NULL,
         name TEXT NOT NULL,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL,
+        FOREIGN KEY (list_id) REFERENCES list_lists(id) ON DELETE CASCADE
     )",
 
+    // ── 7. List Notes (references list_lists and list_note_groups) ──
     "CREATE TABLE IF NOT EXISTS list_notes (
         id TEXT NOT NULL PRIMARY KEY,
         list_id TEXT NOT NULL,
@@ -341,40 +405,37 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        deleted_at TEXT NULL
+        deleted_at TEXT NULL,
+        FOREIGN KEY (list_id) REFERENCES list_lists(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES list_note_groups(id) ON DELETE SET NULL
     )",
 
+    // ── 8. List Templates ──
     "CREATE TABLE IF NOT EXISTS list_templates (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL
     )",
 
-    // ── App preferences ──
+    // ── 9. App preferences ──
     "CREATE TABLE IF NOT EXISTS app_preferences (
         pref_key TEXT NOT NULL PRIMARY KEY,
         pref_value TEXT NOT NULL,
         updated_at TEXT DEFAULT (datetime('now'))
     )",
 
-    // ── Mission module ──
+    // ── 10. Mission Statement ──
     "CREATE TABLE IF NOT EXISTS mission_statement (
         id TEXT NOT NULL PRIMARY KEY,
         content TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL
     )",
 
-    "CREATE TABLE IF NOT EXISTS mission_roles (
-        id TEXT NOT NULL PRIMARY KEY,
-        name TEXT NOT NULL,
-        icon TEXT NOT NULL DEFAULT '',
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )",
-
+    // ── 11. Mission Goals (references mission_roles) ──
     "CREATE TABLE IF NOT EXISTS mission_goals (
         id TEXT NOT NULL PRIMARY KEY,
         role_id TEXT NOT NULL,
@@ -385,10 +446,12 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         end_date TEXT NULL,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL,
+        FOREIGN KEY (role_id) REFERENCES mission_roles(id) ON DELETE CASCADE
     )",
 
-    // ── Habit Tracking ──
+    // ── 12. Habits (Parent Table) ──
     "CREATE TABLE IF NOT EXISTS habits (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -400,9 +463,11 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         reminder TEXT NULL,
         auto_popup_log INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL
     )",
 
+    // ── 13. Habit Checkins (references habits) ──
     "CREATE TABLE IF NOT EXISTS habit_checkins (
         id TEXT NOT NULL PRIMARY KEY,
         habit_id TEXT NOT NULL,
@@ -410,10 +475,12 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         completed INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE (habit_id, date)
+        deleted_at TEXT NULL,
+        UNIQUE (habit_id, date),
+        FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     )",
 
-    // ── Pomodoro Focus ──
+    // ── 14. Pomodoro Focus (references time_management_tasks) ──
     "CREATE TABLE IF NOT EXISTS pomodoro_records (
         id TEXT NOT NULL PRIMARY KEY,
         mode TEXT NOT NULL,
@@ -426,9 +493,13 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         time_range_label TEXT NOT NULL,
         task_id TEXT NULL,
         linked_target TEXT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT NULL,
+        FOREIGN KEY (task_id) REFERENCES time_management_tasks(id) ON DELETE SET NULL
     )",
 
+    // ── 15. Pomodoro Favorites ──
     "CREATE TABLE IF NOT EXISTS pomodoro_favorites (
         id TEXT NOT NULL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -438,17 +509,47 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         accumulated_minutes INTEGER NOT NULL DEFAULT 0,
         linked_target TEXT NULL,
         is_archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT '',
+        deleted_at TEXT NULL
     )",
 
-    // ── Sync Queue (queued DELETEs pending cloud sync) ──
-    "CREATE TABLE IF NOT EXISTS sync_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    // ── 16. Sync State Metadata ──
+    "CREATE TABLE IF NOT EXISTS sync_state (
+        table_name TEXT NOT NULL PRIMARY KEY,
+        last_pulled_at TEXT NULL,
+        last_pushed_at TEXT NULL
+    )",
+
+    // ── 17. Schema Migrations Metadata ──
+    "CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER NOT NULL PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )",
+
+    // ── 18. Outbox Queue Metadata ──
+    "CREATE TABLE IF NOT EXISTS outbox_queue (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
         table_name TEXT NOT NULL,
-        record_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
         action TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(table_name, record_id, action)
+        created_at TEXT NOT NULL,
+        UNIQUE (table_name, entity_id, action)
+    )",
+
+    // ── 19. Dictionary Offline Cache ──
+    "CREATE TABLE IF NOT EXISTS dict_cache (
+        word TEXT NOT NULL PRIMARY KEY,
+        phonetic TEXT NOT NULL DEFAULT '',
+        definition TEXT NOT NULL DEFAULT '',
+        translation TEXT NOT NULL DEFAULT '',
+        pos TEXT NOT NULL DEFAULT '',
+        tag TEXT NOT NULL DEFAULT '',
+        exchange TEXT NOT NULL DEFAULT '',
+        collins INTEGER NOT NULL DEFAULT 0,
+        oxford INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
     )",
 
     // ── Indexes ──
@@ -460,14 +561,28 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_habit_checkins_habit ON habit_checkins(habit_id)",
 ];
 
-/// Create all tables in the local SQLite database.
+/// Create all tables in the local SQLite database and run versioned migrations.
 pub async fn ensure_local_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for sql in SQLITE_DDL_STATEMENTS {
         sqlx::query(*sql).execute(pool).await?;
     }
 
-    // Migration for reminder column in time_management_tasks (no-op if it already exists)
-    let _ = sqlx::query("ALTER TABLE time_management_tasks ADD COLUMN reminder TEXT NULL").execute(pool).await;
+    let applied_rows = sqlx::query("SELECT version FROM schema_migrations").fetch_all(pool).await.unwrap_or_default();
+    let applied_versions: HashSet<i32> = applied_rows.into_iter().filter_map(|r| r.try_get("version").ok()).collect();
+
+    for m in COMMON_MIGRATIONS {
+        if !applied_versions.contains(&m.version) {
+            let _ = sqlx::query(m.sql).execute(pool).await;
+            let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, datetime('now'))")
+                .bind(m.version)
+                .bind(m.name)
+                .execute(pool)
+                .await;
+        }
+    }
+
+    let _ = sqlx::query("UPDATE pomodoro_favorites SET updated_at = created_at WHERE updated_at = ''").execute(pool).await;
+    let _ = sqlx::query("UPDATE pomodoro_records SET updated_at = created_at WHERE updated_at = ''").execute(pool).await;
 
     Ok(())
 }

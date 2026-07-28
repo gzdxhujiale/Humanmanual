@@ -16,6 +16,8 @@ pub struct Model {
     pub task_id: Option<String>,
     pub linked_target: Option<String>,
     pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

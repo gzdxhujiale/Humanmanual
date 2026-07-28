@@ -137,15 +137,12 @@ pub async fn establish_connection() -> Result<MySqlPool, sqlx::Error> {
         }
     });
 
-    let pool_schema = pool.clone();
     let skip_schema_creation = config.skip_schema_creation.unwrap_or(false);
-    tauri::async_runtime::spawn(async move {
-        if !skip_schema_creation {
-            if let Err(e) = crate::schema::ensure_tables(&pool_schema).await {
-                eprintln!("Failed to ensure tables in background: {}", e);
-            }
+    if !skip_schema_creation {
+        if let Err(e) = crate::schema::ensure_tables(&pool).await {
+            eprintln!("Failed to ensure tables: {}", e);
         }
-    });
+    }
 
     Ok(pool)
 }
@@ -219,10 +216,20 @@ pub async fn db_set_preference(
     Ok(())
 }
 
-#[allow(dead_code)]
+use std::sync::atomic::{AtomicBool, Ordering};
+static PUSH_PENDING: AtomicBool = AtomicBool::new(false);
+
 pub fn trigger_background_push(tidb_state: &TidbState, sqlite_pool: sqlx::SqlitePool) {
+    if PUSH_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
     let tidb_state = tidb_state.clone();
     tauri::async_runtime::spawn(async move {
+        // Debounce window: wait 500ms for rapid local modifications to settle
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        PUSH_PENDING.store(false, Ordering::SeqCst);
+
         let guard = tidb_state.0.read().await;
         if let Some(mysql) = guard.as_ref() {
             if let Err(e) = crate::local_db::push_to_tidb(mysql, &sqlite_pool).await {
@@ -231,4 +238,5 @@ pub fn trigger_background_push(tidb_state: &TidbState, sqlite_pool: sqlx::Sqlite
         }
     });
 }
+
 

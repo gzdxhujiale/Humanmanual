@@ -53,3 +53,9 @@ impl From<&str> for AppError {
         AppError(msg.to_string())
     }
 }
+
+impl From<reqwest::Error> for AppError {
+    fn from(e: reqwest::Error) -> Self {
+        AppError(e.to_string())
+    }
+}

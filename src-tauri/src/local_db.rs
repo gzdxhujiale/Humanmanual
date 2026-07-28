@@ -56,92 +56,128 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<Sqlite
     Ok(pool)
 }
 
-/// Copy every row of an entity's table from `$src` into `$dst`, skipping rows
-/// whose id already exists (used for the cloud → local pull).
-macro_rules! copy_table_keep_existing {
-    ($entity:ident, $src:expr, $dst:expr) => {{
-        if let Ok(rows) = $entity::Entity::find().all($src).await {
-            for r in rows {
-                let am = r.into_active_model().reset_all();
-                let _ = $entity::Entity::insert(am)
-                    .on_conflict(
-                        sea_orm::sea_query::OnConflict::column($entity::Column::Id)
-                            .do_nothing()
-                            .to_owned(),
-                    )
-                    .exec($dst)
-                    .await;
-            }
-        }
-    }};
-}
 
-/// Upsert every row of an entity's table from `$src` into `$dst`: on id
-/// conflict all columns except `id`/`created_at` are overwritten (used for
-/// the local → cloud push, where local is the source of truth).
-macro_rules! copy_table_upsert {
-    ($entity:ident, $src:expr, $dst:expr) => {{
+/// Upsert every row of an entity's table from `$src` into `$dst` using Last-Write-Wins (LWW)
+/// based on `updated_at`. Supports incremental delta sync using `sync_state` watermarks.
+macro_rules! copy_table_lww {
+    ($entity:ident, $src:expr, $dst:expr, $sqlite:expr, $table_name:expr, $is_pull:expr) => {{
+        use sea_orm::ColumnTrait;
+        use sea_orm::QueryFilter;
+
+        let watermark = crate::sync::get_watermark($sqlite, $table_name, $is_pull).await;
+        let now_str = crate::sync::now_iso();
+
         let update_cols: Vec<$entity::Column> = <$entity::Column as sea_orm::Iterable>::iter()
             .filter(|c| !matches!(sea_orm::IdenStatic::as_str(c), "id" | "created_at"))
             .collect();
-        if let Ok(rows) = $entity::Entity::find().all($src).await {
-            for r in rows {
-                let am = r.into_active_model().reset_all();
-                let _ = $entity::Entity::insert(am)
-                    .on_conflict(
-                        sea_orm::sea_query::OnConflict::column($entity::Column::Id)
-                            .update_columns(update_cols.iter().copied())
-                            .to_owned(),
-                    )
-                    .exec($dst)
-                    .await;
+
+        let query = $entity::Entity::find();
+        let query = match watermark {
+            Some(ts) => query.filter(
+                $entity::Column::UpdatedAt.gt(ts)
+                    .or($entity::Column::DeletedAt.gt(ts))
+            ),
+            None => query,
+        };
+
+        match query.all($src).await {
+            Ok(rows) => {
+                for r in rows {
+                    let id = r.id.clone();
+                    let should_write = match $entity::Entity::find_by_id(id).one($dst).await {
+                        Ok(Some(existing)) => r.updated_at > existing.updated_at,
+                        Ok(None) => true,
+                        Err(_) => false,
+                    };
+                    if should_write {
+                        let am = r.into_active_model().reset_all();
+                        let _ = $entity::Entity::insert(am)
+                            .on_conflict(
+                                sea_orm::sea_query::OnConflict::column($entity::Column::Id)
+                                    .update_columns(update_cols.iter().copied())
+                                    .to_owned(),
+                            )
+                            .exec($dst)
+                            .await;
+                    }
+                }
+                crate::sync::set_watermark($sqlite, $table_name, &now_str, $is_pull).await;
+            }
+            Err(e) => {
+                eprintln!("[SyncEngine] copy_table_lww error for table {}: {}", $table_name, e);
             }
         }
     }};
 }
 
-/// Apply `$macro` to every synced entity table (keep in step with
+/// Apply LWW sync macro to every synced entity table (keep in step with
 /// `crate::schema::SYNCED_TABLES`).
-macro_rules! for_each_synced_table {
-    ($copy:ident, $src:expr, $dst:expr) => {{
-        $copy!(list_folders, $src, $dst);
-        $copy!(list_lists, $src, $dst);
-        $copy!(list_note_groups, $src, $dst);
-        $copy!(list_notes, $src, $dst);
-        $copy!(list_templates, $src, $dst);
-        $copy!(daily_reviews, $src, $dst);
-        $copy!(time_management_tasks, $src, $dst);
-        $copy!(mission_statement, $src, $dst);
-        $copy!(mission_roles, $src, $dst);
-        $copy!(mission_goals, $src, $dst);
-        $copy!(habits, $src, $dst);
-        $copy!(habit_checkins, $src, $dst);
-        $copy!(pomodoro_records, $src, $dst);
-        $copy!(pomodoro_favorites, $src, $dst);
+macro_rules! sync_all_tables {
+    ($src:expr, $dst:expr, $sqlite:expr, $is_pull:expr) => {{
+        copy_table_lww!(list_folders, $src, $dst, $sqlite, "list_folders", $is_pull);
+        copy_table_lww!(list_lists, $src, $dst, $sqlite, "list_lists", $is_pull);
+        copy_table_lww!(list_note_groups, $src, $dst, $sqlite, "list_note_groups", $is_pull);
+        copy_table_lww!(list_notes, $src, $dst, $sqlite, "list_notes", $is_pull);
+        copy_table_lww!(list_templates, $src, $dst, $sqlite, "list_templates", $is_pull);
+        copy_table_lww!(daily_reviews, $src, $dst, $sqlite, "daily_reviews", $is_pull);
+        copy_table_lww!(time_management_tasks, $src, $dst, $sqlite, "time_management_tasks", $is_pull);
+        copy_table_lww!(mission_statement, $src, $dst, $sqlite, "mission_statement", $is_pull);
+        copy_table_lww!(mission_roles, $src, $dst, $sqlite, "mission_roles", $is_pull);
+        copy_table_lww!(mission_goals, $src, $dst, $sqlite, "mission_goals", $is_pull);
+        copy_table_lww!(habits, $src, $dst, $sqlite, "habits", $is_pull);
+        copy_table_lww!(habit_checkins, $src, $dst, $sqlite, "habit_checkins", $is_pull);
+        copy_table_lww!(pomodoro_records, $src, $dst, $sqlite, "pomodoro_records", $is_pull);
+        copy_table_lww!(pomodoro_favorites, $src, $dst, $sqlite, "pomodoro_favorites", $is_pull);
     }};
 }
 
-/// Pull all existing user data from remote TiDB MySQL into local SQLite (safe sync migration on startup).
+/// Pull all existing user data from remote TiDB MySQL into local SQLite.
 pub async fn pull_from_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel};
     use crate::entities::*;
 
+    // Acquire sync lock to prevent concurrent pull/push
+    let _guard = crate::sync::sync_lock().lock().await;
+
     let db_sqlite = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(sqlite.clone());
     let db_mysql = sea_orm::SqlxMySqlConnector::from_sqlx_mysql_pool(mysql.clone());
 
-    for_each_synced_table!(copy_table_keep_existing, &db_mysql, &db_sqlite);
+    sync_all_tables!(&db_mysql, &db_sqlite, sqlite, true);
 
-    // app_preferences (raw SQL: not a SeaORM entity)
-    if let Ok(rows) = sqlx::query("SELECT pref_key, pref_value FROM app_preferences").fetch_all(mysql).await {
+    // app_preferences: LWW based on updated_at timestamp
+    if let Ok(rows) = sqlx::query("SELECT pref_key, pref_value, updated_at FROM app_preferences").fetch_all(mysql).await {
         use sqlx::Row;
         for row in rows {
             let key: String = row.try_get("pref_key").unwrap_or_default();
             let val: String = row.try_get("pref_value").unwrap_or_default();
-            let _ = sqlx::query("INSERT INTO app_preferences (pref_key, pref_value) VALUES (?, ?) ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value")
-                .bind(&key)
-                .bind(&val)
-                .execute(sqlite)
-                .await;
+            let remote_ts: Option<String> = row.try_get::<String, _>("updated_at").ok();
+
+            // Check local timestamp – only overwrite if remote is newer
+            let should_write = if let Some(ref rts) = remote_ts {
+                match sqlx::query("SELECT updated_at FROM app_preferences WHERE pref_key = ?")
+                    .bind(&key)
+                    .fetch_optional(sqlite)
+                    .await
+                {
+                    Ok(Some(local_row)) => {
+                        let local_ts: String = local_row.try_get("updated_at").unwrap_or_default();
+                        rts.as_str() > local_ts.as_str()
+                    }
+                    Ok(None) => true, // new key
+                    Err(_) => false,
+                }
+            } else {
+                true // no remote timestamp, fallback to always-write for backwards compat
+            };
+
+            if should_write {
+                let _ = sqlx::query("INSERT INTO app_preferences (pref_key, pref_value, updated_at) VALUES (?, ?, ?) ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value, updated_at = excluded.updated_at")
+                    .bind(&key)
+                    .bind(&val)
+                    .bind(&remote_ts.unwrap_or_default())
+                    .execute(sqlite)
+                    .await;
+            }
         }
     }
 
@@ -153,30 +189,35 @@ pub async fn push_to_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), 
     use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel};
     use crate::entities::*;
 
+    // Acquire sync lock to prevent concurrent pull/push
+    let _guard = crate::sync::sync_lock().lock().await;
+
     let db_sqlite = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(sqlite.clone());
     let db_mysql = sea_orm::SqlxMySqlConnector::from_sqlx_mysql_pool(mysql.clone());
 
-    // 0. Process queued DELETE operations from sync_queue
-    if let Ok(queue_items) = sqlx::query("SELECT id, table_name, record_id, action FROM sync_queue WHERE action = 'DELETE'")
-        .fetch_all(sqlite)
-        .await
-    {
-        use sqlx::Row;
-        for row in queue_items {
-            let q_id: i64 = row.try_get("id").unwrap_or_default();
-            let table_name: String = row.try_get("table_name").unwrap_or_default();
-            let record_id: String = row.try_get("record_id").unwrap_or_default();
-
-            if crate::schema::SYNCED_TABLES.contains(&table_name.as_str()) {
-                let delete_sql = format!("DELETE FROM {} WHERE id = ?", table_name);
-                if sqlx::query(&delete_sql).bind(&record_id).execute(mysql).await.is_ok() {
-                    let _ = sqlx::query("DELETE FROM sync_queue WHERE id = ?").bind(q_id).execute(sqlite).await;
+    // Process pending outbox queue events (offline delete propagation & write replay)
+    let outbox_entries = crate::sync::get_pending_outbox(sqlite).await;
+    if !outbox_entries.is_empty() {
+        let mut processed_ids = Vec::new();
+        for entry in &outbox_entries {
+            if crate::schema::SYNCED_TABLES.contains(&entry.table_name.as_str()) {
+                if entry.action == "delete" {
+                    let now = crate::sync::now_iso();
+                    let sql = format!("UPDATE {} SET deleted_at = ?, updated_at = ? WHERE id = ?", entry.table_name);
+                    if sqlx::query(&sql).bind(&now).bind(&now).bind(&entry.entity_id).execute(mysql).await.is_ok() {
+                        processed_ids.push(entry.id);
+                    }
+                } else if entry.action == "upsert" {
+                    processed_ids.push(entry.id);
                 }
+            } else {
+                processed_ids.push(entry.id);
             }
         }
+        crate::sync::clear_outbox_entries(sqlite, &processed_ids).await;
     }
 
-    for_each_synced_table!(copy_table_upsert, &db_sqlite, &db_mysql);
+    sync_all_tables!(&db_sqlite, &db_mysql, sqlite, false);
 
     // app_preferences (raw SQL: not a SeaORM entity)
     if let Ok(rows) = sqlx::query("SELECT pref_key, pref_value FROM app_preferences").fetch_all(sqlite).await {
@@ -190,6 +231,20 @@ pub async fn push_to_tidb(mysql: &MySqlPool, sqlite: &SqlitePool) -> Result<(), 
                 .execute(mysql)
                 .await;
         }
+    }
+
+    // Garbage Collection: physically delete soft-deleted records older than 30 days
+    // to prevent SQLite from growing indefinitely.
+    let cutoff = chrono::Utc::now()
+        .checked_sub_signed(chrono::Duration::days(30))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
+        .unwrap_or_default();
+    
+    for table in crate::schema::SYNCED_TABLES {
+        let sql = format!("DELETE FROM {} WHERE deleted_at < ?", table);
+        let _ = sqlx::query(&sql).bind(&cutoff).execute(sqlite).await;
+        // Best-effort remote GC, doesn't matter if it fails
+        let _ = sqlx::query(&sql).bind(&cutoff).execute(mysql).await;
     }
 
     Ok(())
@@ -345,6 +400,70 @@ mod tests {
             .expect("role present in TiDB should exist in SQLite after pull");
         let dst_name: String = dst.try_get("name").unwrap();
         assert_eq!(dst_name, src_name, "mission_roles.name was mangled during pull");
+    }
+
+    #[tokio::test]
+    async fn incremental_sync_watermark_is_updated() {
+        let Some(mysql) = connect_tidb().await else {
+            eprintln!("skip: TiDB unreachable");
+            return;
+        };
+        let sqlite = setup_sqlite().await;
+
+        pull_from_tidb(&mysql, &sqlite).await.expect("first pull");
+
+        let watermark = crate::sync::get_watermark(&sqlite, "list_notes", true).await;
+        assert!(watermark.is_some(), "last_pulled_at watermark should be set after pull");
+
+        pull_from_tidb(&mysql, &sqlite).await.expect("second pull (incremental)");
+    }
+
+    #[tokio::test]
+    async fn foreign_key_cascade_deletes_child_records() {
+        let sqlite = setup_sqlite().await;
+        sqlx::query("PRAGMA foreign_keys=ON;").execute(&sqlite).await.unwrap();
+
+        let now = crate::sync::now_iso();
+
+        sqlx::query("INSERT INTO list_lists (id, name, created_at, updated_at) VALUES ('list-fk-1', 'Parent List', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&sqlite)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO list_notes (id, list_id, title, content, created_at, updated_at) VALUES ('note-fk-1', 'list-fk-1', 'Child Note', 'Body', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&sqlite)
+            .await
+            .unwrap();
+
+        assert_eq!(sqlite_count(&sqlite, "list_notes").await, 1);
+
+        sqlx::query("DELETE FROM list_lists WHERE id = 'list-fk-1'")
+            .execute(&sqlite)
+            .await
+            .unwrap();
+
+        assert_eq!(sqlite_count(&sqlite, "list_notes").await, 0);
+    }
+
+    #[tokio::test]
+    async fn outbox_queue_records_and_flushes_offline_edits() {
+        let sqlite = setup_sqlite().await;
+
+        crate::sync::record_outbox_event(&sqlite, "list_folders", "folder-outbox-1", "upsert").await;
+        crate::sync::record_outbox_event(&sqlite, "list_folders", "folder-outbox-2", "delete").await;
+
+        let pending = crate::sync::get_pending_outbox(&sqlite).await;
+        assert_eq!(pending.len(), 2, "Outbox queue should have 2 recorded events");
+
+        let ids: Vec<i64> = pending.iter().map(|p| p.id).collect();
+        crate::sync::clear_outbox_entries(&sqlite, &ids).await;
+
+        let after_clear = crate::sync::get_pending_outbox(&sqlite).await;
+        assert_eq!(after_clear.len(), 0, "Outbox queue should be empty after clearing");
     }
 
     #[tokio::test]

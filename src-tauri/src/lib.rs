@@ -40,6 +40,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .setup(|app| {
             // 平台无关的应用数据目录：移动端 mysql.config.json 读写与词典库拷贝都落在这里
             if let Ok(dir) = app.path().app_data_dir() {
@@ -58,10 +65,6 @@ pub fn run() {
                 pool
             });
             app.manage(sqlite_pool.clone());
-
-            // Resolve the bundled ECDICT dictionary database (offline word lookup).
-            let dict_path = dictionary::resolve_dict_path(app.handle());
-            app.manage(dictionary::DictState::new(dict_path));
 
             let tidb_state = db::TidbState::default();
             app.manage(tidb_state.clone());
@@ -82,15 +85,26 @@ pub fn run() {
                             eprintln!("Failed to push data to TiDB: {}", e);
                         }
 
-                        // Background sync loop: periodically flush local changes to TiDB every 60s
+                        // Background sync loop: periodically perform two-way sync with TiDB (15s default, exponential backoff on error)
                         let sqlite_bg = sqlite_pool_clone.clone();
                         let mysql_bg = mysql_pool.clone();
                         tauri::async_runtime::spawn(async move {
-                            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                            let mut poll_secs = 15u64;
                             loop {
-                                interval.tick().await;
-                                if let Err(e) = local_db::push_to_tidb(&mysql_bg, &sqlite_bg).await {
-                                    eprintln!("[SyncEngine Background] Periodic push to TiDB error: {}", e);
+                                tokio::time::sleep(std::time::Duration::from_secs(poll_secs)).await;
+                                let pull_res = local_db::pull_from_tidb(&mysql_bg, &sqlite_bg).await;
+                                let push_res = local_db::push_to_tidb(&mysql_bg, &sqlite_bg).await;
+
+                                if pull_res.is_err() || push_res.is_err() {
+                                    if let Err(e) = &pull_res {
+                                        eprintln!("[SyncEngine Background] Periodic pull from TiDB error: {}", e);
+                                    }
+                                    if let Err(e) = &push_res {
+                                        eprintln!("[SyncEngine Background] Periodic push to TiDB error: {}", e);
+                                    }
+                                    poll_secs = (poll_secs * 2).min(120);
+                                } else {
+                                    poll_secs = 15;
                                 }
                             }
                         });

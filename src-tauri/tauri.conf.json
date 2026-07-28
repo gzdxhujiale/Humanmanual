@@ -28,9 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "resources": [
-      "resources/*.db"
-    ],
+    "resources": [],
     "targets": [
       "nsis"
     ],

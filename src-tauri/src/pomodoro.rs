@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::queue_and_sync_delete;
+use crate::sync::now_iso;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkedTarget {
@@ -68,7 +68,8 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> AppResult<Pomodor
         r#"
         SELECT id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at
         FROM pomodoro_records
-        ORDER BY created_at DESC
+        WHERE deleted_at IS NULL
+        ORDER BY start_time DESC
         "#,
     )
     .fetch_all(&*pool)
@@ -113,6 +114,7 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> AppResult<Pomodor
         r#"
         SELECT id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at
         FROM pomodoro_favorites
+        WHERE deleted_at IS NULL
         ORDER BY created_at DESC
         "#,
     )
@@ -158,17 +160,19 @@ pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> AppResult<Pomodor
 pub async fn pomodoro_upsert_record(
     record: PomodoroRecord,
     pool: State<'_, SqlitePool>,
+    tidb_state: State<'_, TidbState>,
 ) -> AppResult<()> {
     let linked_target_json = record
         .linked_target
         .as_ref()
         .and_then(|t| serde_json::to_string(t).ok());
 
+    let now = now_iso();
     sqlx::query(
         r#"
         INSERT INTO pomodoro_records (
-            id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             mode = excluded.mode,
             phase = excluded.phase,
@@ -179,7 +183,8 @@ pub async fn pomodoro_upsert_record(
             date_label = excluded.date_label,
             time_range_label = excluded.time_range_label,
             task_id = excluded.task_id,
-            linked_target = excluded.linked_target
+            linked_target = excluded.linked_target,
+            updated_at = excluded.updated_at
         "#,
     )
     .bind(&record.id)
@@ -194,9 +199,12 @@ pub async fn pomodoro_upsert_record(
     .bind(&record.task_id)
     .bind(&linked_target_json)
     .bind(&record.created_at)
+    .bind(&now)
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "pomodoro_records", &record.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -206,12 +214,16 @@ pub async fn pomodoro_delete_record(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM pomodoro_records WHERE id = ?")
+    let now = now_iso();
+    sqlx::query("UPDATE pomodoro_records SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    queue_and_sync_delete(&pool, &tidb_state, "pomodoro_records", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "pomodoro_records", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }
@@ -221,17 +233,14 @@ pub async fn pomodoro_clear_all_records(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM pomodoro_records")
+    let now = now_iso();
+    sqlx::query("UPDATE pomodoro_records SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL")
+        .bind(&now)
+        .bind(&now)
         .execute(&*pool)
         .await?;
 
-    let _ = sqlx::query("DELETE FROM sync_queue WHERE table_name = 'pomodoro_records'")
-        .execute(&*pool)
-        .await;
-
-    if let Some(ref mysql) = *tidb_state.inner().0.read().await {
-        let _ = sqlx::query("DELETE FROM pomodoro_records").execute(mysql).await;
-    }
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }
@@ -240,18 +249,20 @@ pub async fn pomodoro_clear_all_records(
 pub async fn pomodoro_upsert_favorite(
     task: FavoriteFocusTask,
     pool: State<'_, SqlitePool>,
+    tidb_state: State<'_, TidbState>,
 ) -> AppResult<()> {
     let linked_target_json = task
         .linked_target
         .as_ref()
         .and_then(|t| serde_json::to_string(t).ok());
     let is_archived_val = if task.is_archived { 1i32 } else { 0i32 };
+    let now = now_iso();
 
     sqlx::query(
         r#"
         INSERT INTO pomodoro_favorites (
-            id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             icon = excluded.icon,
@@ -259,7 +270,8 @@ pub async fn pomodoro_upsert_favorite(
             duration_minutes = excluded.duration_minutes,
             accumulated_minutes = excluded.accumulated_minutes,
             linked_target = excluded.linked_target,
-            is_archived = excluded.is_archived
+            is_archived = excluded.is_archived,
+            updated_at = excluded.updated_at
         "#,
     )
     .bind(&task.id)
@@ -271,9 +283,12 @@ pub async fn pomodoro_upsert_favorite(
     .bind(&linked_target_json)
     .bind(is_archived_val)
     .bind(&task.created_at)
+    .bind(&now)
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "pomodoro_favorites", &task.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -283,12 +298,16 @@ pub async fn pomodoro_delete_favorite(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM pomodoro_favorites WHERE id = ?")
+    let now = now_iso();
+    sqlx::query("UPDATE pomodoro_favorites SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    queue_and_sync_delete(&pool, &tidb_state, "pomodoro_favorites", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "pomodoro_favorites", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }

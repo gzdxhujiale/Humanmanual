@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::db::TidbState;
 use crate::error::AppResult;
-use crate::sync::queue_and_sync_delete;
+use crate::sync::now_iso;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +43,7 @@ pub struct TimeManagementData {
 #[tauri::command]
 pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagementData> {
     let roles_rows = sqlx::query(
-        "SELECT id, name, CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at FROM mission_roles ORDER BY sort_order"
+        "SELECT id, name, CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at FROM mission_roles WHERE deleted_at IS NULL ORDER BY sort_order"
     )
     .fetch_all(&*pool)
     .await?;
@@ -59,7 +59,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
     }
 
     let tasks_rows = sqlx::query(
-        "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder FROM time_management_tasks"
+        "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder FROM time_management_tasks WHERE deleted_at IS NULL"
     )
     .fetch_all(&*pool)
     .await?;
@@ -87,11 +87,12 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
 
 
 #[tauri::command]
-pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
     let completed_val: i32 = if task.completed { 1 } else { 0 };
+    let now = now_iso();
     sqlx::query(
-        "INSERT INTO time_management_tasks (id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO time_management_tasks (id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET 
             title = excluded.title, 
             role_id = excluded.role_id, 
@@ -103,7 +104,8 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResul
             completed_at = excluded.completed_at, 
             description = excluded.description, 
             deadline = excluded.deadline, 
-            reminder = excluded.reminder"
+            reminder = excluded.reminder,
+            updated_at = excluded.updated_at"
     )
     .bind(&task.id)
     .bind(&task.title)
@@ -117,9 +119,12 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResul
     .bind(&task.description)
     .bind(task.deadline)
     .bind(&task.reminder)
+    .bind(&now)
     .execute(&*pool)
     .await?;
 
+    crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &task.id, "upsert").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
@@ -129,12 +134,16 @@ pub async fn tm_delete_task(
     pool: State<'_, SqlitePool>,
     tidb_state: State<'_, TidbState>
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM time_management_tasks WHERE id = ?")
+    let now = now_iso();
+    sqlx::query("UPDATE time_management_tasks SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(&now)
         .bind(&id)
         .execute(&*pool)
         .await?;
 
-    queue_and_sync_delete(&pool, &tidb_state, "time_management_tasks", &id).await;
+    crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &id, "delete").await;
+    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }
