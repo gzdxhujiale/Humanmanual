@@ -567,12 +567,23 @@ pub async fn ensure_local_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query(*sql).execute(pool).await?;
     }
 
+    // SQLite防御性修复：如果因 MySQL 语法差异导致 ALTER 失败，补充添加更新/软删除列
+    let _ = sqlx::query("ALTER TABLE pomodoro_favorites ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE pomodoro_favorites ADD COLUMN deleted_at TEXT NULL").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE pomodoro_records ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE pomodoro_records ADD COLUMN deleted_at TEXT NULL").execute(pool).await;
+
     let applied_rows = sqlx::query("SELECT version FROM schema_migrations").fetch_all(pool).await.unwrap_or_default();
     let applied_versions: HashSet<i32> = applied_rows.into_iter().filter_map(|r| r.try_get("version").ok()).collect();
 
     for m in COMMON_MIGRATIONS {
         if !applied_versions.contains(&m.version) {
-            let _ = sqlx::query(m.sql).execute(pool).await;
+            let sql = match m.version {
+                9 => "ALTER TABLE pomodoro_favorites ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+                19 => "ALTER TABLE pomodoro_records ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+                _ => m.sql,
+            };
+            let _ = sqlx::query(sql).execute(pool).await;
             let _ = sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, datetime('now'))")
                 .bind(m.version)
                 .bind(m.name)
@@ -583,6 +594,8 @@ pub async fn ensure_local_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     let _ = sqlx::query("UPDATE pomodoro_favorites SET updated_at = created_at WHERE updated_at = ''").execute(pool).await;
     let _ = sqlx::query("UPDATE pomodoro_records SET updated_at = created_at WHERE updated_at = ''").execute(pool).await;
+    let _ = sqlx::query("UPDATE mission_goals SET start_date = NULL WHERE start_date = ''").execute(pool).await;
+    let _ = sqlx::query("UPDATE mission_goals SET end_date = NULL WHERE end_date = ''").execute(pool).await;
 
     Ok(())
 }
