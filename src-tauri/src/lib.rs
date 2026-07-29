@@ -70,54 +70,10 @@ pub fn run() {
             // Start native Rust task reminder scheduler background loop
             reminder_scheduler::start_reminder_scheduler(app.handle().clone(), sqlite_pool.clone());
 
-            let tidb_state = db::TidbState::default();
-            app.manage(tidb_state.clone());
-
-            // Async background attempt to connect to remote TiDB, pull cloud data, and push local updates
-            let sqlite_pool_clone = sqlite_pool.clone();
-            let tidb_state_clone = tidb_state.clone();
-            tauri::async_runtime::spawn(async move {
-                match db::establish_connection().await {
-                    Ok(mysql_pool) => {
-                        println!("Remote TiDB database connected. Performing initial two-way sync...");
-                        *tidb_state_clone.0.write().await = Some(mysql_pool.clone());
-
-                        if let Err(e) = local_db::pull_from_tidb(&mysql_pool, &sqlite_pool_clone).await {
-                            eprintln!("Failed to pull data from TiDB: {}", e);
-                        }
-                        if let Err(e) = local_db::push_to_tidb(&mysql_pool, &sqlite_pool_clone).await {
-                            eprintln!("Failed to push data to TiDB: {}", e);
-                        }
-
-                        // Background sync loop: periodically perform two-way sync with TiDB (15s default, exponential backoff on error)
-                        let sqlite_bg = sqlite_pool_clone.clone();
-                        let mysql_bg = mysql_pool.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let mut poll_secs = 15u64;
-                            loop {
-                                tokio::time::sleep(std::time::Duration::from_secs(poll_secs)).await;
-                                let pull_res = local_db::pull_from_tidb(&mysql_bg, &sqlite_bg).await;
-                                let push_res = local_db::push_to_tidb(&mysql_bg, &sqlite_bg).await;
-
-                                if pull_res.is_err() || push_res.is_err() {
-                                    if let Err(e) = &pull_res {
-                                        eprintln!("[SyncEngine Background] Periodic pull from TiDB error: {}", e);
-                                    }
-                                    if let Err(e) = &push_res {
-                                        eprintln!("[SyncEngine Background] Periodic push to TiDB error: {}", e);
-                                    }
-                                    poll_secs = (poll_secs * 2).min(120);
-                                } else {
-                                    poll_secs = 15;
-                                }
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("TiDB cloud database unreachable (offline mode): {}", e);
-                    }
-                }
-            });
+            let turso_cfg = db::read_turso_config();
+            if let Some(ref url) = turso_cfg.url {
+                println!("Turso cloud sync engine active. Target URL: {}", url);
+            }
 
             Ok(())
         })
@@ -126,8 +82,8 @@ pub fn run() {
             file_dialog::save_markdown_file,
             file_dialog::pick_multiple_markdown_files,
             file_dialog::save_multiple_markdown_files,
-            db::db_get_config,
-            db::db_save_config,
+            db::db_get_turso_config,
+            db::db_save_turso_config,
             db::db_get_preference,
             db::db_set_preference,
             time_management::tm_load_all,

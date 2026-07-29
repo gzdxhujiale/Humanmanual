@@ -2,10 +2,10 @@ import React from "react";
 import { call } from "../../../lib/tauriClient";
 
 function getDatabaseApi() {
-  if (window.aistudyDatabase) return window.aistudyDatabase;
+  const db = window.aistudyDatabase;
   return {
-    getConfig: () => call("db_get_config"),
-    saveConfig: (config: any) => call("db_save_config", { config })
+    getTursoConfig: () => db?.getTursoConfig ? db.getTursoConfig() : call("db_get_turso_config"),
+    saveTursoConfig: (config: any) => db?.saveTursoConfig ? db.saveTursoConfig(config) : call("db_save_turso_config", { config })
   };
 }
 
@@ -16,11 +16,11 @@ export function DatabaseSettingsPanel() {
   const [message, setMessage] = React.useState("");
 
   React.useEffect(() => {
-    getDatabaseApi().getConfig().then((cfg) => {
-      setConfig(cfg);
+    getDatabaseApi().getTursoConfig().then((cfg: any) => {
+      setConfig(cfg || {});
       setLoading(false);
-    }).catch(err => {
-      setMessage("获取配置失败：" + (err.message || err));
+    }).catch((err: any) => {
+      setMessage("获取 Turso 配置失败：" + (err?.message || err));
       setLoading(false);
     });
   }, []);
@@ -30,8 +30,8 @@ export function DatabaseSettingsPanel() {
     setSaving(true);
     setMessage("");
     try {
-      await getDatabaseApi().saveConfig(config);
-      setMessage("配置已保存。请重启应用以生效新连接！");
+      await getDatabaseApi().saveTursoConfig(config);
+      setMessage("Turso 配置已保存。请重启应用生效新同步设置！");
     } catch (err: any) {
       setMessage("保存失败：" + (err.message || err));
     } finally {
@@ -47,41 +47,52 @@ export function DatabaseSettingsPanel() {
     }));
   };
 
-  if (loading) return <div className="settings-panel"><p>加载配置中...</p></div>;
-  if (!config) return <div className="settings-panel"><p>无法加载配置，可能当前版本不支持。</p></div>;
+  if (loading) return <div className="settings-panel"><p>加载 Turso 配置中...</p></div>;
 
   return (
     <div className="shortcut-settings-panel database-settings">
       <form onSubmit={handleSave} className="shortcut-settings-list">
         <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
-            <strong>Host</strong>
+            <strong>Turso Database URL</strong>
           </div>
-          <input type="text" name="host" title="Database Host" placeholder="Database Host" value={config.host || ""} onChange={handleChange} className="db-connection-input host" />
+          <input
+            type="text"
+            name="url"
+            title="Turso Database URL"
+            placeholder="libsql://your-database.turso.io"
+            value={config?.url || ""}
+            onChange={handleChange}
+            className="db-connection-input host"
+          />
         </article>
         <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
-            <strong>Port</strong>
+            <strong>Auth Token</strong>
           </div>
-          <input type="number" name="port" title="Database Port" placeholder="Database Port" value={config.port || 3306} onChange={handleChange} className="db-connection-input port" />
+          <input
+            type="password"
+            name="authToken"
+            title="Turso Auth Token"
+            placeholder="eyJhbGci..."
+            value={config?.authToken || ""}
+            onChange={handleChange}
+            className="db-connection-input password"
+          />
         </article>
         <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
-            <strong>User</strong>
+            <label htmlFor="syncOnStart" className="db-connection-label">启动时自动全量同步</label>
           </div>
-          <input type="text" name="user" title="Database User" placeholder="Database User" value={config.user || ""} onChange={handleChange} className="db-connection-input user" />
-        </article>
-        <article className="shortcut-settings-row db-connection-row">
-          <div className="shortcut-settings-main">
-            <strong>Password</strong>
-          </div>
-          <input type="password" name="password" title="Database Password" placeholder="Database Password" value={config.password || ""} onChange={handleChange} className="db-connection-input password" />
-        </article>
-        <article className="shortcut-settings-row db-connection-row">
-          <div className="shortcut-settings-main">
-            <label htmlFor="skipSchemaCreation" className="db-connection-label">跳过建表检查 (加速连接)</label>
-          </div>
-          <input type="checkbox" id="skipSchemaCreation" name="skipSchemaCreation" title="Skip Schema Creation" placeholder="Skip Schema Creation" checked={config.skipSchemaCreation || false} onChange={handleChange} className="db-connection-checkbox" />
+          <input
+            type="checkbox"
+            id="syncOnStart"
+            name="syncOnStart"
+            title="Sync On Start"
+            checked={config?.syncOnStart ?? true}
+            onChange={handleChange}
+            className="db-connection-checkbox"
+          />
         </article>
 
         {message && (
@@ -92,7 +103,7 @@ export function DatabaseSettingsPanel() {
 
         <div className="shortcut-settings-actions">
           <button className="primary-button" type="submit" disabled={saving}>
-            {saving ? "保存中..." : "保存配置"}
+            {saving ? "保存中..." : "保存 Turso 配置"}
           </button>
         </div>
       </form>

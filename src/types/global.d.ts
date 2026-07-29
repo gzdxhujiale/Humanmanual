@@ -9,6 +9,8 @@ declare global {
     aistudyDatabase?: {
       getConfig: () => Promise<any>;
       saveConfig: (config: any) => Promise<void>;
+      getTursoConfig?: () => Promise<any>;
+      saveTursoConfig?: (config: any) => Promise<void>;
     };
   }
 }

@@ -259,7 +259,7 @@ pub async fn habit_toggle_checkin(
     date: String,
     completed: bool,
     pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>
+    _tidb_state: State<'_, TidbState>
 ) -> AppResult<HabitCheckIn> {
     let now = now_iso();
     let completed_val = if completed { 1i32 } else { 0i32 };
@@ -294,33 +294,6 @@ pub async fn habit_toggle_checkin(
     let final_completed: i32 = row.try_get("completed").unwrap_or(0);
     let created_at: String = row.try_get("created_at").unwrap_or_default();
     let updated_at: String = row.try_get("updated_at").unwrap_or_default();
-
-    // 3. Sync to TiDB asynchronously in background
-    let tidb_state_clone = tidb_state.inner().clone();
-    let final_id_clone = final_id.clone();
-    let habit_id_clone = habit_id.clone();
-    let date_clone = date.clone();
-    let created_at_clone = created_at.clone();
-    let updated_at_clone = updated_at.clone();
-
-    tauri::async_runtime::spawn(async move {
-        let guard = tidb_state_clone.0.read().await;
-        if let Some(ref mysql) = *guard {
-            let _ = sqlx::query(
-                "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE completed = VALUES(completed), updated_at = VALUES(updated_at)"
-            )
-            .bind(&final_id_clone)
-            .bind(&habit_id_clone)
-            .bind(&date_clone)
-            .bind(final_completed as i8)
-            .bind(&created_at_clone)
-            .bind(&updated_at_clone)
-            .execute(mysql)
-            .await;
-        }
-    });
 
     Ok(HabitCheckIn {
         id: final_id,

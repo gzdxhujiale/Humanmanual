@@ -7,6 +7,7 @@ import {
 import dayjs from 'dayjs';
 import { QuadrantType, Task, TaskReminder, parseReminder, serializeReminder, reminderLabel } from './timeManagementTypes';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
+import { isMobilePlatform } from '../../lib/platform';
 
 // ==========================================
 // TaskQuickEdit — TickTick 风格任务快捷编辑浮层
@@ -306,6 +307,9 @@ export const TaskQuickEditPopover = memo(forwardRef<TaskQuickEditHandle, TaskQui
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
       const t = e.target as Node;
+      // 防护：若 e.target 已经在点击回调中被 React 卸载（如选择下拉菜单选项），绝不触发外部点击关闭
+      if (!t || !document.body.contains(t)) return;
+
       if (timePopRef.current?.contains(t) || remindPopRef.current?.contains(t)) return;
       if (third) {
         setThird(null);
@@ -316,7 +320,11 @@ export const TaskQuickEditPopover = memo(forwardRef<TaskQuickEditHandle, TaskQui
         setDateOpen(false);
         return;
       }
-      handleClose();
+
+      // 移动端由 mobile-tqe-backdrop 专门接管背景遮罩点击，桌面端才根据 mousedown 外部点击关闭
+      if (!isMobilePlatform()) {
+        handleClose();
+      }
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
@@ -393,15 +401,18 @@ export const TaskQuickEditPopover = memo(forwardRef<TaskQuickEditHandle, TaskQui
     pm?.focus();
   };
 
+  const isMobile = isMobilePlatform();
+
   return createPortal(
     <>
+      {isMobile && <div className="mobile-tqe-backdrop" onClick={handleClose} />}
       {/* ===== 第一层：任务快捷编辑浮层 ===== */}
       <div
         ref={popRef}
-        className="tqe-popover"
+        className={`tqe-popover${isMobile ? ' mobile-tqe-sheet' : ''}`}
         role="dialog"
         aria-label="编辑任务"
-        style={{ top: l1Pos?.top ?? -9999, left: l1Pos?.left ?? -9999, width: L1_WIDTH }}
+        style={isMobile ? {} : { top: l1Pos?.top ?? -9999, left: l1Pos?.left ?? -9999, width: L1_WIDTH }}
       >
         <div className="tqe-toprow">
           <button

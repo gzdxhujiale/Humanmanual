@@ -1,0 +1,6 @@
+{
+  "url": "libsql://humanmanual-gzdxhujiale.aws-ap-northeast-1.turso.io",
+  "authToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODUzMTgzOTUsImlkIjoiMDE5ZmFkNDQtMmEwMS03ODFjLTg3MWMtOGMwYTVkNmJlMzQxIiwia2lkIjoiYlNjeDd1aEViYlNJcnJ5V2VFZFMxbkwwenpEQ0g5d0JTZktHWFQ3X3M3dyIsInJpZCI6IjI5YzAxZjU4LTY0MWQtNDQ3My1iM2FiLTQ4MWE2YzczMTg1NyJ9.YMFIY2k0kXUGBbUdK77TnxeS2n1_a_82W64yJjgOX3sLxSN0_q_eyRumnPRjfKlS7AYJ2ChR9k4A8PYL2Y6UAA",
+  "syncIntervalMs": 5000,
+  "syncOnStart": true
+}

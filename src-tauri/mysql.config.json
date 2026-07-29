@@ -1,7 +1,0 @@
-{
-  "host": "gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
-  "port": 4000,
-  "user": "24LcgDNkgTvCTPz.root",
-  "password": "4DpLYsXL6brv1phl",
-  "database": "aistudy_public"
-}

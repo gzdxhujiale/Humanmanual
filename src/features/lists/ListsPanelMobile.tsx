@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Plus, ChevronRight, Folder as FolderIcon, X, Check } from 'lucide-react';
 import { useListsStore } from './listsStore';
-import { ReactjsTiptapEditor, convertMarkdownToTipTapJson, convertTipTapJsonToMarkdown } from '../reactjs-tiptap-v1';
+import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import { triggerHaptic } from '../../lib/haptics';
 import './lists.css';
 
@@ -103,10 +103,10 @@ export function ListsPanelMobile() {
             />
             <div style={{ flex: 1, minHeight: '300px' }}>
               <ReactjsTiptapEditor
-                content={convertMarkdownToTipTapJson(activeNote.content || '')}
-                onChange={(json) => {
-                  const md = convertTipTapJsonToMarkdown(json);
-                  updateNote(activeNote.id, { content: md });
+                key={activeNote.id}
+                content={activeNote.content || ''}
+                onChange={(jsonStr) => {
+                  updateNote(activeNote.id, { content: jsonStr });
                 }}
               />
             </div>

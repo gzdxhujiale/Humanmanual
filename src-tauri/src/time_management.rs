@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use tauri::State;
 
-use crate::db::TidbState;
 use crate::error::AppResult;
 use crate::sync::now_iso;
 
@@ -87,7 +86,7 @@ pub async fn tm_load_all(pool: State<'_, SqlitePool>) -> AppResult<TimeManagemen
 
 
 #[tauri::command]
-pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>) -> AppResult<()> {
     let completed_val: i32 = if task.completed { 1 } else { 0 };
     let now = now_iso();
     sqlx::query(
@@ -123,9 +122,6 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>, tidb_state:
     .execute(&*pool)
     .await?;
 
-    crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &task.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-
     // If task is completed or reminder is updated, allow new reminder schedules to fire
     if task.completed {
         let _ = sqlx::query("DELETE FROM task_reminder_fired WHERE key LIKE ?")
@@ -141,7 +137,6 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>, tidb_state:
 pub async fn tm_delete_task(
     id: String,
     pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>
 ) -> AppResult<()> {
     let now = now_iso();
     sqlx::query("UPDATE time_management_tasks SET deleted_at = ?, updated_at = ? WHERE id = ?")
@@ -155,9 +150,6 @@ pub async fn tm_delete_task(
         .bind(format!("{}@%", id))
         .execute(&*pool)
         .await;
-
-    crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
 
     Ok(())
 }

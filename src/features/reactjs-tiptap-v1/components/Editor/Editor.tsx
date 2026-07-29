@@ -15,6 +15,7 @@ import { localeActions } from 'reactjs-tiptap-editor/locale-bundle';
 localeActions.setLang('zh_CN');
 
 // Base Kit
+import Collaboration from '@tiptap/extension-collaboration';
 import { Document } from '@tiptap/extension-document';
 import { HardBreak } from '@tiptap/extension-hard-break';
 import { ListItem } from '@tiptap/extension-list';
@@ -455,10 +456,14 @@ export interface ReactjsTiptapEditorProps {
   enableTemplates?: boolean;
   supportTemplates?: boolean;
   templateButtonColor?: string;
+  collaborationDoc?: any;
+  collaborationField?: string;
 }
 
-const parseContent = (content?: string) => {
+const parseContent = (content?: any) => {
   if (!content) return '';
+  if (typeof content === 'object') return content;
+  if (typeof content !== 'string') return String(content);
   const trimmed = content.trim();
 
   // 1. TipTap JSON string
@@ -502,6 +507,8 @@ export function Editor({
   enableTemplates,
   supportTemplates,
   templateButtonColor,
+  collaborationDoc,
+  collaborationField = 'default',
 }: ReactjsTiptapEditorProps = {}) {
   const hasTemplateSupport = Boolean(
     enableCustomTemplates || supportCustomTemplates || enableTemplates || supportTemplates
@@ -545,8 +552,16 @@ export function Editor({
         })
       );
     }
+    if (collaborationDoc) {
+      list.push(
+        Collaboration.configure({
+          document: collaborationDoc,
+          field: collaborationField,
+        })
+      );
+    }
     return list;
-  }, [hasTemplateSupport, templateButtonColor]);
+  }, [hasTemplateSupport, templateButtonColor, collaborationDoc, collaborationField]);
 
   const editor = useEditor({
     textDirection: 'auto',

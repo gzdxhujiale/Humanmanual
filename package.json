@@ -40,6 +40,7 @@
     "@tiptap/core": "^3.27.4",
     "@tiptap/extension-bubble-menu": "^3.27.4",
     "@tiptap/extension-code-block-lowlight": "3.27.4",
+    "@tiptap/extension-collaboration": "^3.27.4",
     "@tiptap/extension-color": "^3.27.4",
     "@tiptap/extension-document": "^3.28.0",
     "@tiptap/extension-drag-handle": "3.27.4",
@@ -96,6 +97,7 @@
   },
   "devDependencies": {
     "@base-ui/react": "^1.6.0",
+    "@libsql/client": "^0.17.4",
     "@tailwindcss/postcss": "^4.3.3",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
@@ -110,6 +112,7 @@
     "autoprefixer": "^10.5.4",
     "class-variance-authority": "^0.7.1",
     "jsdom": "^29.1.1",
+    "mysql2": "^3.23.2",
     "postcss": "^8.5.20",
     "quill": "file:./scripts/npm-stubs/quill",
     "sass-embedded": "^1.100.0",

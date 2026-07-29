@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // Shared sync helpers: canonical timestamp formatting, tombstone tracking,
 // concurrency guard, and the common "local delete → sync_queue + tombstone →
 // best-effort remote delete" flow used by every module's delete command.
@@ -71,17 +73,8 @@ pub struct OutboxEntry {
     pub action: String,
 }
 
-/// Record an action ('upsert' or 'delete') in SQLite outbox_queue for reliable offline replay.
-pub async fn record_outbox_event(pool: &sqlx::SqlitePool, table_name: &str, entity_id: &str, action: &str) {
-    let now = now_iso();
-    let sql = "INSERT INTO outbox_queue (table_name, entity_id, action, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(table_name, entity_id, action) DO UPDATE SET created_at = excluded.created_at";
-    let _ = sqlx::query(sql)
-        .bind(table_name)
-        .bind(entity_id)
-        .bind(action)
-        .bind(&now)
-        .execute(pool)
-        .await;
+/// Record an action ('upsert' or 'delete') - No-op for Turso libSQL embedded replica sync.
+pub async fn record_outbox_event(_pool: &sqlx::SqlitePool, _table_name: &str, _entity_id: &str, _action: &str) {
 }
 
 /// Fetch pending outbox entries from SQLite.

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // Single home for ALL table definitions, in both dialects:
 //   - DDL_STATEMENTS:        remote TiDB (MySQL) tables
 //   - SQLITE_DDL_STATEMENTS: local SQLite mirror + sync_queue + indexes
@@ -5,7 +7,7 @@
 // When adding a table, update all three lists here.
 
 use std::collections::HashSet;
-use sqlx::{MySqlPool, SqlitePool, Row};
+use sqlx::{SqlitePool, Row};
 
 /// Tables mirrored between local SQLite and remote TiDB. Used by the
 /// sync_queue DELETE flush as a whitelist and by the pull/push sync.
@@ -283,32 +285,6 @@ const COMMON_MIGRATIONS: &[MigrationStep] = &[
     MigrationStep { version: 25, name: "cleanup_orphan_groups", sql: "DELETE FROM list_note_groups WHERE list_id NOT IN (SELECT id FROM list_lists)" },
     MigrationStep { version: 26, name: "cleanup_orphan_note_groups_ref", sql: "UPDATE list_notes SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM list_note_groups)" },
 ];
-
-pub async fn ensure_tables(pool: &MySqlPool) -> Result<(), sqlx::Error> {
-    for sql in DDL_STATEMENTS {
-        if let Err(e) = sqlx::query(*sql).execute(pool).await {
-            eprintln!("[MySQL DDL] table setup warning/notice: {}", e);
-        }
-    }
-
-    let applied_rows = sqlx::query("SELECT version FROM schema_migrations").fetch_all(pool).await.unwrap_or_default();
-    let applied_versions: HashSet<i32> = applied_rows.into_iter().filter_map(|r| r.try_get("version").ok()).collect();
-
-    for m in COMMON_MIGRATIONS {
-        if !applied_versions.contains(&m.version) {
-            let _ = sqlx::query(m.sql).execute(pool).await;
-            let _ = sqlx::query("INSERT IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP(3))")
-                .bind(m.version)
-                .bind(m.name)
-                .execute(pool)
-                .await;
-        }
-    }
-    let _ = sqlx::query("ALTER TABLE time_management_tasks MODIFY COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)").execute(pool).await;
-    let _ = sqlx::query("DELETE FROM list_notes WHERE list_id NOT IN (SELECT id FROM list_lists)").execute(pool).await;
-    let _ = sqlx::query("UPDATE list_notes SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM list_note_groups)").execute(pool).await;
-    Ok(())
-}
 
 // ── Local SQLite schema (mirror of the tables above, plus sync_queue & indexes) ──
 
