@@ -41,6 +41,8 @@ fn get_app_data_path() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string()))
 }
 
+const DEFAULT_MYSQL_CONFIG: &str = include_str!("../mysql.config.json");
+
 fn read_config() -> MysqlConfigJson {
     let mut paths: Vec<PathBuf> = Vec::new();
     // Tauri 应用数据目录（移动端唯一候选，桌面作为额外候选）
@@ -82,7 +84,9 @@ fn read_config() -> MysqlConfigJson {
             }
         }
     }
-    MysqlConfigJson::default()
+
+    // 移动端/全新安装未找到本地文件时，回退到打包内置的默认 mysql.config.json 配置
+    serde_json::from_str::<MysqlConfigJson>(DEFAULT_MYSQL_CONFIG).unwrap_or_default()
 }
 
 pub async fn establish_connection() -> Result<MySqlPool, sqlx::Error> {

@@ -167,8 +167,9 @@
 }
 
 .app-layout.is-mobile .custom-main-content {
-  /* 页面底端保留空间，确保主内容不被底部 TabBar 遮挡 */
-  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  /* 页面顶端留出手机系统状态栏 / 刘海屏安全区空间 */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: 0;
 }
 
 /* 移动端底部 TabBar 容器 */
