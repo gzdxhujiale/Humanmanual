@@ -9,6 +9,7 @@ mod list;
 mod local_db;
 mod mission;
 mod pomodoro;
+mod reminder_scheduler;
 mod schema;
 mod sync;
 mod time_management;
@@ -65,6 +66,9 @@ pub fn run() {
                 pool
             });
             app.manage(sqlite_pool.clone());
+
+            // Start native Rust task reminder scheduler background loop
+            reminder_scheduler::start_reminder_scheduler(app.handle().clone(), sqlite_pool.clone());
 
             let tidb_state = db::TidbState::default();
             app.manage(tidb_state.clone());

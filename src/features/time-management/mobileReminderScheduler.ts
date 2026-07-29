@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { sendNotification, cancel, Schedule } from '@tauri-apps/plugin-notification';
 import { useTimeStore } from './timeManagementStore';
 import { Task, parseReminder } from './timeManagementTypes';
-import { deadlineBody } from './taskReminderScheduler';
+import { deadlineBody, getTaskTargetDate } from './taskReminderScheduler';
 import { requestNotificationPermission } from '../../lib/notifications';
 import { logSilent } from '../../lib/logger';
 
@@ -36,7 +36,7 @@ interface UpcomingReminder {
   body: string;
 }
 
-/** 与桌面版 check() 同语义：提醒日 = 截止日 − offsetDays；repeat 时逐日直至截止日 */
+/** 与桌面版 check() 同语义：提醒日 = 到期日 − offsetDays；repeat 时逐日直至到期日 */
 function computeUpcoming(tasks: Task[]): UpcomingReminder[] {
   const now = dayjs();
   const todayStart = now.startOf('day');
@@ -44,11 +44,12 @@ function computeUpcoming(tasks: Task[]): UpcomingReminder[] {
   const list: UpcomingReminder[] = [];
 
   for (const task of tasks) {
-    if (task.completed || !task.deadline) continue;
+    if (task.completed) continue;
     const r = parseReminder(task.reminder);
     if (!r) continue;
 
-    const deadlineDay = dayjs(task.deadline).startOf('day');
+    const targetDate = getTaskTargetDate(task);
+    const deadlineDay = targetDate.startOf('day');
     const remindDay = deadlineDay.subtract(r.offsetDays, 'day');
     const [h, m] = r.time.split(':').map(Number);
     const lastDay = r.repeat ? deadlineDay : remindDay;

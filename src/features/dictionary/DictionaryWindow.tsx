@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { Minus, Square, Copy, X, Search, Star, Pin } from 'lucide-react';
+import { Minus, Square, Copy, X, Search, Pin, Volume2 } from 'lucide-react';
 import { lookupWord, DICTIONARY_LOOKUP_EVENT, DictionaryLookupPayload } from './dictionaryService';
 import { DictEntry } from './dictionaryTypes';
 import { logWarn } from '../../lib/logger';
@@ -216,23 +216,20 @@ export function DictResult({ entry }: { entry: DictEntry }) {
     );
   }
 
+  const playAudio = (url?: string) => {
+    if (!url) return;
+    const audio = new Audio(url);
+    audio.play().catch((err) => console.warn('Audio play failed:', err));
+  };
+
   const translations = splitLines(entry.translation);
   const definitions = splitLines(entry.definition);
   const forms = parseExchange(entry.exchange);
-  const tags = entry.tag ? entry.tag.split(/\s+/).filter(Boolean) : [];
 
   return (
     <div className="dict-result">
       <div className="dict-word-row">
         <h1 className="dict-word">{entry.word}</h1>
-        {entry.collins > 0 && (
-          <span className="dict-collins" title={`柯林斯星级 ${entry.collins}`}>
-            {Array.from({ length: entry.collins }).map((_, i) => (
-              <Star key={i} size={12} fill="currentColor" />
-            ))}
-          </span>
-        )}
-        {entry.oxford > 0 && <span className="dict-badge dict-badge-oxford">牛津核心</span>}
       </div>
 
       {entry.lemmatizedFrom && (
@@ -241,15 +238,49 @@ export function DictResult({ entry }: { entry: DictEntry }) {
         </div>
       )}
 
-      {entry.phonetic && <div className="dict-phonetic">/{entry.phonetic}/</div>}
+      {/* Phonetics & Audio Controls */}
+      <div className="dict-phonetic-row">
+        {entry.ukPhonetic && (
+          <button
+            type="button"
+            className="dict-audio-btn"
+            onClick={() => playAudio(entry.ukAudio)}
+            title="点击播放英音"
+          >
+            <span className="dict-audio-tag">英</span> [{entry.ukPhonetic}]
+            <Volume2 size={13} className="dict-audio-icon" />
+          </button>
+        )}
+        {entry.usPhonetic && (
+          <button
+            type="button"
+            className="dict-audio-btn"
+            onClick={() => playAudio(entry.usAudio)}
+            title="点击播放美音"
+          >
+            <span className="dict-audio-tag">美</span> [{entry.usPhonetic}]
+            <Volume2 size={13} className="dict-audio-icon" />
+          </button>
+        )}
+        {!entry.ukPhonetic && !entry.usPhonetic && entry.phonetic && (
+          <button
+            type="button"
+            className="dict-audio-btn"
+            onClick={() => playAudio(entry.usAudio || entry.ukAudio)}
+            title="点击播放发音"
+          >
+            /{entry.phonetic}/
+            <Volume2 size={13} className="dict-audio-icon" />
+          </button>
+        )}
+      </div>
 
-      {tags.length > 0 && (
-        <div className="dict-tags">
-          {tags.map((t) => (
-            <span key={t} className="dict-badge">
-              {t}
-            </span>
-          ))}
+      {/* Part of Speech */}
+      {entry.pos && (
+        <div className="dict-meta-row">
+          <span className="dict-pos-badge" title="词性">
+            {entry.pos}
+          </span>
         </div>
       )}
 
@@ -275,6 +306,47 @@ export function DictResult({ entry }: { entry: DictEntry }) {
         </section>
       )}
 
+      {/* Bilingual Example Sentences */}
+      {entry.examples && entry.examples.length > 0 && (
+        <section className="dict-section">
+          <h2 className="dict-section-title">双语例句</h2>
+          <div className="dict-examples-list">
+            {entry.examples.map((ex, i) => (
+              <div key={i} className="dict-example-card">
+                <div className="dict-example-sentence">
+                  <span>{ex.sentence}</span>
+                  <button
+                    type="button"
+                    className="dict-example-audio"
+                    onClick={() => playAudio(`https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(ex.sentence)}`)}
+                    title="播放例句发音"
+                  >
+                    <Volume2 size={12} />
+                  </button>
+                </div>
+                <div className="dict-example-tran">{ex.translation}</div>
+                {ex.source && <div className="dict-example-source">—— {ex.source}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Common Phrases */}
+      {entry.phrases && entry.phrases.length > 0 && (
+        <section className="dict-section">
+          <h2 className="dict-section-title">常用短语 / 词组</h2>
+          <div className="dict-phrases-grid">
+            {entry.phrases.map((p, i) => (
+              <div key={i} className="dict-phrase-card">
+                <span className="dict-phrase-text">{p.phrase}</span>
+                {p.translation && <span className="dict-phrase-tran">{p.translation}</span>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {forms.length > 0 && (
         <section className="dict-section">
           <h2 className="dict-section-title">词形变化</h2>
@@ -291,3 +363,4 @@ export function DictResult({ entry }: { entry: DictEntry }) {
     </div>
   );
 }
+

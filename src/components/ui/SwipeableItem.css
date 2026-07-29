@@ -1,0 +1,47 @@
+.swipeable-item-wrapper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  touch-action: pan-y;
+}
+
+.swipeable-item-content {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  background: var(--surface-0, #ffffff);
+}
+
+.swipe-action-bg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  transition: opacity 100ms ease;
+}
+
+.swipe-action-right {
+  left: 0;
+  right: 50%;
+  justify-content: flex-start;
+  background: #10b981; /* 绿色完成背景 */
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.swipe-action-left {
+  left: 50%;
+  right: 0;
+  justify-content: flex-end;
+  background: #ef4444; /* 红色删除背景 */
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}

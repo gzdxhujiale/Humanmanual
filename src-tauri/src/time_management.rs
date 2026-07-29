@@ -125,6 +125,15 @@ pub async fn tm_upsert_task(task: Task, pool: State<'_, SqlitePool>, tidb_state:
 
     crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &task.id, "upsert").await;
     crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+
+    // If task is completed or reminder is updated, allow new reminder schedules to fire
+    if task.completed {
+        let _ = sqlx::query("DELETE FROM task_reminder_fired WHERE key LIKE ?")
+            .bind(format!("{}@%", task.id))
+            .execute(&*pool)
+            .await;
+    }
+
     Ok(())
 }
 
@@ -141,6 +150,11 @@ pub async fn tm_delete_task(
         .bind(&id)
         .execute(&*pool)
         .await?;
+
+    let _ = sqlx::query("DELETE FROM task_reminder_fired WHERE key LIKE ?")
+        .bind(format!("{}@%", id))
+        .execute(&*pool)
+        .await;
 
     crate::sync::record_outbox_event(pool.inner(), "time_management_tasks", &id, "delete").await;
     crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());

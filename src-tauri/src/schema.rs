@@ -552,6 +552,12 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         created_at TEXT NOT NULL
     )",
 
+    // ── 20. Task Reminder Fired Deduplication ──
+    "CREATE TABLE IF NOT EXISTS task_reminder_fired (
+        key TEXT NOT NULL PRIMARY KEY,
+        fired_at INTEGER NOT NULL
+    )",
+
     // ── Indexes ──
     "CREATE INDEX IF NOT EXISTS idx_list_lists_folder ON list_lists(folder_id, sort_order)",
     "CREATE INDEX IF NOT EXISTS idx_list_notes_list_group ON list_notes(list_id, group_id, sort_order)",

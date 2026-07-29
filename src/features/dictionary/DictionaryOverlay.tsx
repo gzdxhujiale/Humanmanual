@@ -4,12 +4,11 @@ import { Search, X } from 'lucide-react';
 import { lookupWord } from './dictionaryService';
 import { DictResult } from './DictionaryWindow';
 import { DictEntry } from './dictionaryTypes';
+import { triggerHaptic } from '../../lib/haptics';
 import './dictionary.css';
 
 // ==========================================
-// DictionaryOverlay — 移动端词典浮层
-// 移动端没有独立词典窗口，openDictionaryWindow 在 isMobilePlatform()
-// 时改走本 store；组件挂在 App 根部（仅移动端渲染），全屏覆盖展示。
+// DictionaryOverlay — 移动端词典 Bottom Sheet 抽屉
 // ==========================================
 
 interface DictionaryOverlayState {
@@ -22,7 +21,10 @@ interface DictionaryOverlayState {
 export const useDictionaryOverlayStore = create<DictionaryOverlayState>((set) => ({
   visible: false,
   word: '',
-  open: (word) => set({ visible: true, word }),
+  open: (word) => {
+    triggerHaptic('medium');
+    set({ visible: true, word });
+  },
   close: () => set({ visible: false, word: '' }),
 }));
 
@@ -56,7 +58,6 @@ export function DictionaryOverlay() {
     }
   }, []);
 
-  // 打开或推入新词时触发查询
   useEffect(() => {
     if (!visible) return;
     setInput(word);
@@ -67,13 +68,18 @@ export function DictionaryOverlay() {
   if (!visible) return null;
 
   return (
-    <div className="dict-overlay">
-      <div className="dict-window dict-overlay-panel">
+    <div className="dict-overlay-backdrop" onClick={close}>
+      <div className="dict-overlay-sheet" onClick={(e) => e.stopPropagation()}>
+        {/* 顶部 Drag Handle 指示条 */}
+        <div className="dict-overlay-handle-bar">
+          <div className="dict-overlay-handle" />
+        </div>
+
         <div className="dict-header">
           <span className="dict-header-title">词典查询</span>
           <div className="dict-window-controls">
             <button type="button" className="dict-window-btn close-btn" onClick={close} title="关闭" aria-label="关闭">
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
         </div>

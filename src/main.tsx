@@ -149,15 +149,11 @@ function App() {
       import("./features/settings/updateStore").then(({ useUpdateStore }) => {
         useUpdateStore.getState().initBackgroundUpdate();
       });
-      // 任务提醒调度器：仅主窗口运行。桌面版 30s 轮询；移动端后台 JS 会被冻结，
-      // 改用系统级 scheduled notification（AlarmManager 到点投递）
+      // 任务提醒调度器：桌面端已下沉移交至 Rust 后端 (reminder_scheduler.rs) 线程守护；
+      // 移动端后台 JS 会被冻结，保持移动端系统级 scheduled notification (AlarmManager 到点投递)
       if (isMobilePlatform()) {
         import("./features/time-management/mobileReminderScheduler").then(({ startMobileReminderScheduler }) => {
           startMobileReminderScheduler();
-        });
-      } else {
-        import("./features/time-management/taskReminderScheduler").then(({ startTaskReminderScheduler }) => {
-          startTaskReminderScheduler();
         });
       }
       // 空闲预热任务快捷编辑子窗口（窗口池），首次打开即秒显；移动端无窗口池，跳过

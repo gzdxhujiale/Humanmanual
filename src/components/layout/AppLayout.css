@@ -150,7 +150,7 @@
   margin-top: auto;
 }
 
-/* ===== 移动端布局：左侧工具栏变底部 TabBar，隐藏自绘菜单栏 ===== */
+/* ===== 移动端布局：底部 TabBar 与 更多 Sheet 抽屉 ===== */
 .app-layout.is-mobile {
   flex-direction: column-reverse;
 }
@@ -159,38 +159,194 @@
   flex: 0 0 auto;
   width: 100%;
   height: auto;
+  z-index: 100;
 }
 
 .app-layout.is-mobile .app-layout-menubar {
   display: none; /* MenuBar 组件移动端返回 null，占位容器一并隐藏 */
 }
 
-.app-layout.is-mobile .custom-toolbar {
-  flex-direction: row;
+.app-layout.is-mobile .custom-main-content {
+  /* 页面底端保留空间，确保主内容不被底部 TabBar 遮挡 */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+
+/* 移动端底部 TabBar 容器 */
+.mobile-tabbar {
+  width: 100%;
+  background: var(--surface-0, #ffffff);
+  border-top: 1px solid var(--line-soft, #eaedf0);
+  padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.03);
+}
+
+.mobile-tabbar-inner {
+  display: flex;
   align-items: center;
-  height: auto;
-  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
-  border-right: none;
-  border-top: 1px solid var(--line-soft);
+  justify-content: space-around;
+  width: 100%;
 }
 
-.app-layout.is-mobile .toolbar-nav {
-  flex-direction: row;
-  flex: 1 1 auto;
-  width: auto;
-  gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
+/* 移动端单按钮（触控热区 ≥ 48px × 48px） */
+.mobile-tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 48px;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #717d8a);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 120ms ease, background-color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.app-layout.is-mobile .toolbar-btn {
-  width: 44px;
-  height: 40px;
-  margin: 0;
+.mobile-tab-btn:active {
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
-.app-layout.is-mobile .settings-btn {
-  margin-top: 0;
-  margin-left: 6px;
-  flex-shrink: 0;
+.mobile-tab-btn.active {
+  color: var(--accent, #2563eb);
+  font-weight: 600;
 }
+
+.mobile-tab-icon {
+  margin-bottom: 2px;
+  transition: transform 120ms ease;
+}
+
+.mobile-tab-btn.active .mobile-tab-icon {
+  transform: translateY(-1px) scale(1.05);
+}
+
+.mobile-tab-label {
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: -0.2px;
+}
+
+/* ===== 移动端“更多” Bottom Sheet 抽屉 ===== */
+.mobile-more-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  animation: mobileFadeIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mobile-more-sheet {
+  background: var(--surface-0, #ffffff);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  padding: 8px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.15);
+  animation: mobileSlideUp 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.mobile-more-handle-bar {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 10px;
+}
+
+.mobile-more-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-medium, #d0d7de);
+}
+
+.mobile-more-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 0 4px;
+}
+
+.mobile-more-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-strong, #1f2937);
+}
+
+.mobile-more-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--surface-2, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+}
+
+.mobile-more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.mobile-more-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft, #f0f0f0);
+  background: var(--surface-1, #f9fafb);
+  color: var(--text-primary, #374151);
+  cursor: pointer;
+  transition: all 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-more-card:active {
+  transform: scale(0.97);
+  background: var(--surface-2, #f3f4f6);
+}
+
+.mobile-more-card.active {
+  border-color: var(--accent, #2563eb);
+  background: rgba(37, 99, 235, 0.06);
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+
+.mobile-more-card-icon {
+  margin-bottom: 8px;
+  color: inherit;
+}
+
+.mobile-more-card-name {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mobile-more-card.settings-card {
+  background: var(--surface-2, #f3f4f6);
+  border-color: transparent;
+}
+
+@keyframes mobileFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mobileSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
