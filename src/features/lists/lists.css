@@ -889,6 +889,8 @@
 
 .ProseMirror li {
   margin-bottom: 0.25em;
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 .ProseMirror blockquote {

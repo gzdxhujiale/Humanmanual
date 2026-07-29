@@ -815,7 +815,11 @@ function NoteDrawerContent({
         </div>
       </div>
 
-      <div className="note-drawer-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: 0, overflow: 'hidden', position: 'relative' }}>
+      <div
+        className="note-drawer-content"
+        style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: 0, overflow: 'hidden', position: 'relative' }}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <ReactjsTiptapEditor
           content={content}
           initialContent={content}
@@ -1473,7 +1477,23 @@ export function ListsPanel() {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      shouldHandleEvent(event: KeyboardEvent) {
+        const target = event.target as HTMLElement | null;
+        if (
+          target &&
+          (target.isContentEditable ||
+            target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.closest('.ProseMirror') ||
+            target.closest('[contenteditable="true"]'))
+        ) {
+          return false;
+        }
+        return true;
+      },
+    })
   );
 
   const handleDragStart = (event: DragStartEvent) => {

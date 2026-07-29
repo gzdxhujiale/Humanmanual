@@ -51,6 +51,7 @@ export const InteractivePlaceholder = Extension.create<InteractivePlaceholderOpt
                 container.style.fontSize = '15px';
                 container.style.lineHeight = '1.7';
                 container.style.userSelect = 'none';
+                container.style.pointerEvents = 'none';
 
                 const textSpan = document.createElement('span');
                 textSpan.textContent = this.options.placeholderText || '记录你的想法，或 ';
@@ -58,8 +59,9 @@ export const InteractivePlaceholder = Extension.create<InteractivePlaceholderOpt
                 const btn = document.createElement('span');
                 btn.className = 'interactive-placeholder-btn';
                 btn.textContent = this.options.templateButtonText || '使用模板';
-                btn.style.color = this.options.templateButtonColor || 'var(--accent, #1f6fd1)';
+                btn.style.color = this.options.templateButtonColor || '#1f6fd1';
                 btn.style.cursor = 'pointer';
+                btn.style.pointerEvents = 'auto';
 
                 btn.addEventListener('mousedown', (e) => {
                   e.preventDefault();
@@ -71,7 +73,7 @@ export const InteractivePlaceholder = Extension.create<InteractivePlaceholderOpt
                 container.appendChild(btn);
                 return container;
               },
-              { side: -1 }
+              { side: -1, ignoreSelection: true, key: 'interactive-placeholder-widget' }
             );
 
             return DecorationSet.create(doc, [widget]);

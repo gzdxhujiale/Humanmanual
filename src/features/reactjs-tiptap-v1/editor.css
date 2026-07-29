@@ -1,7 +1,8 @@
 .reactjs-tiptap-editor,
 .template-reactjs-tiptap,
 .task-detail-reactjs-tiptap,
-.note-drawer-reactjs-tiptap {
+.note-drawer-reactjs-tiptap,
+.editor-reactjs-tiptap {
   height: 100%;
   width: 100%;
   display: flex;
@@ -11,19 +12,61 @@
   background-color: var(--surface-1, #fafbfc);
 }
 
-.reactjs-tiptap-editor .ProseMirror.ProseMirror.ProseMirror {
+.reactjs-tiptap-editor .ProseMirror.ProseMirror.ProseMirror,
+.template-reactjs-tiptap .ProseMirror.ProseMirror.ProseMirror,
+.task-detail-reactjs-tiptap .ProseMirror.ProseMirror.ProseMirror,
+.note-drawer-reactjs-tiptap .ProseMirror.ProseMirror.ProseMirror,
+.editor-reactjs-tiptap .ProseMirror.ProseMirror.ProseMirror {
   padding: 24px 36px !important;
   min-height: 100%;
   box-sizing: border-box;
   outline: none;
   background-color: var(--surface-1, #fafbfc);
   color: var(--text-primary, #2b3139);
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  caret-color: var(--text-primary, #18181b) !important;
 }
 
 /* Hide default tiptap placeholder when custom template prompt is displayed */
 .editor-reactjs-tiptap .ProseMirror p.is-editor-empty:first-child:before,
-.note-drawer-reactjs-tiptap .ProseMirror p.is-editor-empty:first-child:before {
+.note-drawer-reactjs-tiptap .ProseMirror p.is-editor-empty:first-child:before,
+.task-detail-reactjs-tiptap .ProseMirror p.is-editor-empty:first-child:before,
+.reactjs-tiptap-editor .ProseMirror p.is-editor-empty:first-child:before {
   display: none !important;
+}
+
+/* Custom Interactive Placeholder Widget & Template Button */
+.ProseMirror p.is-editor-empty:first-child {
+  position: relative !important;
+}
+
+.interactive-placeholder-widget {
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  height: 1.6em !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  white-space: nowrap !important;
+}
+
+.interactive-placeholder-btn {
+  color: #1f6fd1 !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+  position: relative !important;
+  z-index: 1 !important;
+  transition: color 0.15s ease, text-decoration 0.15s ease !important;
+}
+
+.interactive-placeholder-btn:hover {
+  color: #1557a6 !important;
+  text-decoration: underline !important;
 }
 
 /* Ensure all popovers, dropdown portals and drag handle menus render above modal dialog overlays (z-index 1000) */
@@ -141,6 +184,20 @@ div[data-richtext-portal] {
   margin-top: 0.125rem !important;
   margin-bottom: 0.125rem !important;
   position: relative;
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.ProseMirror [data-type="taskItem"] > label {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.ProseMirror [data-type="taskItem"] > div {
+  flex: 1 1 auto;
+  min-width: 0;
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 .ProseMirror ul p,
@@ -149,6 +206,8 @@ div[data-richtext-portal] {
   margin-top: 0 !important;
   margin-bottom: 0.125rem !important;
   line-height: 1.5 !important;
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 .ProseMirror p {

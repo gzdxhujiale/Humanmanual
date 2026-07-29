@@ -383,7 +383,7 @@ const RichTextToolbar = memo(({ onOpenTemplate }: { onOpenTemplate?: () => void 
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 shrink-0 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border border-dashed border-border/60 hover:border-border"
+              className="h-7 px-2 shrink-0 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 border border-dashed border-blue-300/80 hover:border-blue-400 bg-blue-50/40 hover:bg-blue-50 dark:bg-blue-950/20"
               title="使用模板"
               onClick={onOpenTemplate}
               type="button"
