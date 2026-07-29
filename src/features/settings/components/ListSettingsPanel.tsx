@@ -29,7 +29,7 @@ export function ListSettingsPanel() {
           笔记弹出方式
         </h3>
         <p style={{ fontSize: '13px', color: 'var(--text-muted, #6b7280)', marginBottom: '16px', lineHeight: '1.5' }}>
-          控制在清单界面点击笔记时的展示形态。设置将实时同步至本地 SQLite 数据库与远端 TiDB 数据库。
+          控制在清单界面点击笔记时的展示形态。设置将实时同步至本地 SQLite 数据库与远端 Turso 数据库。
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', maxWidth: '520px' }}>

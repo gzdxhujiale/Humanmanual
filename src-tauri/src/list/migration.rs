@@ -1,12 +1,12 @@
-// One-shot migration of legacy localStorage data into SQLite.
+﻿// One-shot migration of legacy localStorage data into SQLite.
 // All inserts are INSERT OR IGNORE so re-running is harmless.
 
 use serde::Deserialize;
-use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::error::AppResult;
 use crate::sync::now_iso;
+use crate::turso_state::TursoDb;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -90,82 +90,59 @@ pub struct MigrationTemplate {
 }
 
 #[tauri::command]
-pub async fn list_migrate_from_local(data: MigrationData, pool: State<'_, SqlitePool>) -> AppResult<()> {
+pub async fn list_migrate_from_local(data: MigrationData, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    let mut tx = pool.begin().await?;
+    let conn = db.conn()?;
 
-    // Migrate folders
     for f in &data.folders {
         let pinned: i32 = if f.is_pinned.unwrap_or(false) { 1 } else { 0 };
-        sqlx::query(
-            "INSERT OR IGNORE INTO list_folders (id, name, is_pinned, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&f.id).bind(&f.name).bind(pinned).bind(f.sort_order.unwrap_or(0))
-        .bind(&now).bind(&now)
-        .execute(&mut *tx).await?;
+        conn.execute(
+            "INSERT OR IGNORE INTO list_folders (id, name, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![f.id.clone(), f.name.clone(), pinned, f.sort_order.unwrap_or(0), now.clone(), now.clone()],
+        ).await?;
     }
 
-    // Migrate lists
     for l in &data.lists {
         let pinned: i32 = if l.is_pinned.unwrap_or(false) { 1 } else { 0 };
-        let icon = l.icon.as_deref().unwrap_or("");
-        let color = l.color.as_deref().unwrap_or("#000000");
-        let view_type = l.view_type.as_deref().unwrap_or("list");
-        sqlx::query(
-            "INSERT OR IGNORE INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&l.id).bind(&l.name).bind(icon).bind(color).bind(view_type)
-        .bind(&l.folder_id).bind(pinned).bind(l.sort_order.unwrap_or(0))
-        .bind(&now).bind(&now)
-        .execute(&mut *tx).await?;
+        let icon = l.icon.clone().unwrap_or_default();
+        let color = l.color.clone().unwrap_or_else(|| "#000000".to_string());
+        let view_type = l.view_type.clone().unwrap_or_else(|| "list".to_string());
+        conn.execute(
+            "INSERT OR IGNORE INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            libsql::params![l.id.clone(), l.name.clone(), icon, color, view_type, l.folder_id.clone(), pinned, l.sort_order.unwrap_or(0), now.clone(), now.clone()],
+        ).await?;
     }
 
-    // Migrate note groups
     for g in &data.note_groups {
-        sqlx::query(
-            "INSERT OR IGNORE INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&g.id).bind(&g.list_id).bind(&g.name).bind(g.sort_order.unwrap_or(0))
-        .bind(&now).bind(&now)
-        .execute(&mut *tx).await?;
+        conn.execute(
+            "INSERT OR IGNORE INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![g.id.clone(), g.list_id.clone(), g.name.clone(), g.sort_order.unwrap_or(0), now.clone(), now.clone()],
+        ).await?;
     }
 
-    // Migrate notes
     for n in &data.notes {
         let pinned: i32 = if n.is_pinned.unwrap_or(false) { 1 } else { 0 };
-        let title = n.title.as_deref().unwrap_or("");
-        let content = n.content.as_deref().unwrap_or("");
+        let title = n.title.clone().unwrap_or_default();
+        let content = n.content.clone().unwrap_or_default();
         let created = chrono::DateTime::from_timestamp_millis(n.created_at.unwrap_or(0))
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
             .unwrap_or_else(|| now.clone());
         let updated = chrono::DateTime::from_timestamp_millis(n.updated_at.unwrap_or(0))
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
             .unwrap_or_else(|| now.clone());
-        sqlx::query(
-            "INSERT OR IGNORE INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&n.id).bind(&n.list_id).bind(&n.group_id).bind(title).bind(content)
-        .bind(pinned).bind(n.sort_order.unwrap_or(0))
-        .bind(&created).bind(&updated)
-        .execute(&mut *tx).await?;
+        conn.execute(
+            "INSERT OR IGNORE INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            libsql::params![n.id.clone(), n.list_id.clone(), n.group_id.clone(), title, content, pinned, n.sort_order.unwrap_or(0), created, updated],
+        ).await?;
     }
 
-    // Migrate templates
     for t in &data.templates {
-        let content = t.content.as_deref().unwrap_or("");
-        sqlx::query(
-            "INSERT OR IGNORE INTO list_templates (id, name, content, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(&t.id).bind(&t.name).bind(content)
-        .bind(&now).bind(&now)
-        .execute(&mut *tx).await?;
+        let content = t.content.clone().unwrap_or_default();
+        conn.execute(
+            "INSERT OR IGNORE INTO list_templates (id, name, content, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            libsql::params![t.id.clone(), t.name.clone(), content, now.clone(), now.clone()],
+        ).await?;
     }
 
-    tx.commit().await?;
     Ok(())
 }

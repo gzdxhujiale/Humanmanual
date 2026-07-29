@@ -1,11 +1,10 @@
-use serde::{Deserialize, Serialize};
-use sqlx::{SqlitePool, Row};
+﻿use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::TidbState;
 use crate::error::AppResult;
 use crate::sync::now_iso;
+use crate::turso_state::TursoDb;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Habit {
@@ -63,81 +62,58 @@ pub struct HabitData {
 }
 
 #[tauri::command]
-pub async fn habit_load_all(pool: State<'_, SqlitePool>) -> AppResult<HabitData> {
-    let habits_rows = sqlx::query(
-        r#"
-        SELECT id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at FROM habits WHERE deleted_at IS NULL ORDER BY created_at ASC
-        "#
-    )
-    .fetch_all(&*pool)
-    .await?;
+pub async fn habit_load_all(db: State<'_, TursoDb>) -> AppResult<HabitData> {
+    let conn = db.conn()?;
 
-    let habits = habits_rows
-        .into_iter()
-        .map(|row| {
-            let id: String = row.try_get("id").unwrap_or_default();
-            let name: String = row.try_get("name").unwrap_or_default();
-            let frequency: Option<String> = row.try_get("frequency").ok().flatten();
-            let goal: Option<String> = row.try_get("goal").ok().flatten();
-            let start_date: Option<String> = row.try_get("start_date").ok().flatten();
-            let duration: Option<String> = row.try_get("duration").ok().flatten();
-            let group: Option<String> = row.try_get("category").ok().flatten();
-            let reminder: Option<String> = row.try_get("reminder").ok().flatten();
-            let auto_popup_log_i32: i32 = row.try_get("auto_popup_log").unwrap_or(0);
-            let created_at: String = row.try_get("created_at").unwrap_or_default();
-            let updated_at: String = row.try_get("updated_at").unwrap_or_default();
-            Habit {
-                id,
-                name,
-                frequency,
-                goal,
-                start_date,
-                duration,
-                group,
-                check_in_time: reminder.clone(),
-                reminder,
-                auto_popup_log: auto_popup_log_i32 != 0,
-                created_at,
-                updated_at,
-            }
-        })
-        .collect();
+    let mut habits_rows = conn.query(
+        "SELECT id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at FROM habits WHERE deleted_at IS NULL ORDER BY created_at ASC",
+        (),
+    ).await?;
 
-    let checkins_rows = sqlx::query(
-        r#"
-        SELECT id, habit_id, date, completed, created_at, updated_at
-        FROM habit_checkins WHERE deleted_at IS NULL
-        "#
-    )
-    .fetch_all(&*pool)
-    .await?;
+    let mut habits = Vec::new();
+    while let Ok(Some(row)) = habits_rows.next().await {
+        let auto_popup_log_i32: i32 = row.get(8).unwrap_or(0);
+        let reminder: Option<String> = row.get(7).ok();
+        habits.push(Habit {
+            id: row.get(0).unwrap_or_default(),
+            name: row.get(1).unwrap_or_default(),
+            frequency: row.get(2).ok(),
+            goal: row.get(3).ok(),
+            start_date: row.get(4).ok(),
+            duration: row.get(5).ok(),
+            group: row.get(6).ok(),
+            check_in_time: reminder.clone(),
+            reminder,
+            auto_popup_log: auto_popup_log_i32 != 0,
+            created_at: row.get(9).unwrap_or_default(),
+            updated_at: row.get(10).unwrap_or_default(),
+        });
+    }
 
-    let check_ins = checkins_rows
-        .into_iter()
-        .map(|row| {
-            let id: String = row.try_get("id").unwrap_or_default();
-            let habit_id: String = row.try_get("habit_id").unwrap_or_default();
-            let date: String = row.try_get("date").unwrap_or_default();
-            let completed: i32 = row.try_get("completed").unwrap_or_default();
-            let created_at: String = row.try_get("created_at").unwrap_or_default();
-            let updated_at: String = row.try_get("updated_at").unwrap_or_default();
+    let conn2 = db.conn()?;
+    let mut checkins_rows = conn2.query(
+        "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL",
+        (),
+    ).await?;
 
-            HabitCheckIn {
-                id,
-                habit_id,
-                date,
-                completed: completed != 0,
-                created_at,
-                updated_at,
-            }
-        })
-        .collect();
+    let mut check_ins = Vec::new();
+    while let Ok(Some(row)) = checkins_rows.next().await {
+        let completed: i32 = row.get(3).unwrap_or(0);
+        check_ins.push(HabitCheckIn {
+            id: row.get(0).unwrap_or_default(),
+            habit_id: row.get(1).unwrap_or_default(),
+            date: row.get(2).unwrap_or_default(),
+            completed: completed != 0,
+            created_at: row.get(4).unwrap_or_default(),
+            updated_at: row.get(5).unwrap_or_default(),
+        });
+    }
 
     Ok(HabitData { habits, check_ins })
 }
 
 #[tauri::command]
-pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<Habit> {
+pub async fn habit_create(payload: HabitPayload, db: State<'_, TursoDb>) -> AppResult<Habit> {
     let id = Uuid::new_v4().to_string();
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
@@ -146,29 +122,13 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>, ti
     let today_local = chrono::Local::now().format("%Y-%m-%d").to_string();
     let start_date_val = payload.start_date.filter(|s| !s.trim().is_empty()).unwrap_or(today_local);
 
-    sqlx::query(
-        r#"
-        INSERT INTO habits (id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#
-    )
-    .bind(&id)
-    .bind(&name_val)
-    .bind(&payload.frequency)
-    .bind(&payload.goal)
-    .bind(&start_date_val)
-    .bind(&payload.duration)
-    .bind(&payload.group)
-    .bind(&reminder_val)
-    .bind(auto_popup_log_val)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool)
-    .await?;
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO habits (id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        libsql::params![id.clone(), name_val.clone(), payload.frequency.clone(), payload.goal.clone(), start_date_val.clone(), payload.duration.clone(), payload.group.clone(), reminder_val.clone(), auto_popup_log_val, now.clone(), now.clone()],
+    ).await?;
 
-    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "upsert").await;
-
-    let result = Ok(Habit {
+    Ok(Habit {
         id,
         name: name_val,
         frequency: payload.frequency,
@@ -181,75 +141,36 @@ pub async fn habit_create(payload: HabitPayload, pool: State<'_, SqlitePool>, ti
         auto_popup_log: auto_popup_log_val != 0,
         created_at: now.clone(),
         updated_at: now,
-    });
-
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-    result
+    })
 }
 
 #[tauri::command]
-pub async fn habit_update(id: String, payload: HabitPayload, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn habit_update(id: String, payload: HabitPayload, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let auto_popup_log_val = if payload.auto_popup_log.unwrap_or(false) { 1i32 } else { 0i32 };
     let reminder_val = payload.check_in_time.or(payload.reminder);
 
-    sqlx::query(
-        r#"
-        UPDATE habits SET 
-            name = COALESCE(?, name), 
-            frequency = ?, 
-            goal = ?, 
-            start_date = ?, 
-            duration = ?, 
-            category = ?, 
-            reminder = COALESCE(?, reminder), 
-            auto_popup_log = ?, 
-            updated_at = ? 
-        WHERE id = ?
-        "#
-    )
-    .bind(&payload.name)
-    .bind(&payload.frequency)
-    .bind(&payload.goal)
-    .bind(&payload.start_date)
-    .bind(&payload.duration)
-    .bind(&payload.group)
-    .bind(&reminder_val)
-    .bind(auto_popup_log_val)
-    .bind(&now)
-    .bind(&id)
-    .execute(&*pool)
-    .await?;
+    let conn = db.conn()?;
+    conn.execute(
+        "UPDATE habits SET name = COALESCE(?1, name), frequency = ?2, goal = ?3, start_date = ?4, duration = ?5, category = ?6, reminder = COALESCE(?7, reminder), auto_popup_log = ?8, updated_at = ?9 WHERE id = ?10",
+        libsql::params![payload.name, payload.frequency, payload.goal, payload.start_date, payload.duration, payload.group, reminder_val, auto_popup_log_val, now, id],
+    ).await?;
 
-    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn habit_delete(
-    id: String,
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>
-) -> AppResult<()> {
+pub async fn habit_delete(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE habit_checkins SET deleted_at = ?, updated_at = ? WHERE habit_id = ?")
-        .bind(&now)
-        .bind(&now)
-        .bind(&id)
-        .execute(&*pool)
-        .await?;
-
-    sqlx::query("UPDATE habits SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(&now)
-        .bind(&id)
-        .execute(&*pool)
-        .await?;
-
-    crate::sync::record_outbox_event(pool.inner(), "habits", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-
+    let conn = db.conn()?;
+    conn.execute(
+        "UPDATE habit_checkins SET deleted_at = ?1, updated_at = ?2 WHERE habit_id = ?3",
+        libsql::params![now.clone(), now.clone(), id.clone()],
+    ).await?;
+    conn.execute(
+        "UPDATE habits SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id],
+    ).await?;
     Ok(())
 }
 
@@ -258,49 +179,34 @@ pub async fn habit_toggle_checkin(
     habit_id: String,
     date: String,
     completed: bool,
-    pool: State<'_, SqlitePool>,
-    _tidb_state: State<'_, TidbState>
+    db: State<'_, TursoDb>,
 ) -> AppResult<HabitCheckIn> {
     let now = now_iso();
     let completed_val = if completed { 1i32 } else { 0i32 };
-
     let checkin_id = Uuid::new_v4().to_string();
 
-    // 1. Atomic UPSERT into local SQLite
-    let _ = sqlx::query(
-        "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at, deleted_at = NULL"
-    )
-    .bind(&checkin_id)
-    .bind(&habit_id)
-    .bind(&date)
-    .bind(completed_val)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool)
-    .await?;
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at, deleted_at = NULL",
+        libsql::params![checkin_id, habit_id.clone(), date.clone(), completed_val, now.clone(), now.clone()],
+    ).await?;
 
-    crate::sync::record_outbox_event(pool.inner(), "habit_checkins", &checkin_id, "upsert").await;
+    let mut row_q = conn.query(
+        "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL AND habit_id = ?1 AND date = ?2",
+        libsql::params![habit_id.clone(), date.clone()],
+    ).await?;
 
-    // 2. Fetch updated row
-    let row = sqlx::query("SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL AND habit_id = ? AND date = ?")
-        .bind(&habit_id)
-        .bind(&date)
-        .fetch_one(&*pool)
-        .await?;
+    if let Ok(Some(row)) = row_q.next().await {
+        let final_completed: i32 = row.get(3).unwrap_or(0);
+        return Ok(HabitCheckIn {
+            id: row.get(0).unwrap_or_default(),
+            habit_id,
+            date,
+            completed: final_completed != 0,
+            created_at: row.get(4).unwrap_or_default(),
+            updated_at: row.get(5).unwrap_or_default(),
+        });
+    }
 
-    let final_id: String = row.try_get("id").unwrap_or_default();
-    let final_completed: i32 = row.try_get("completed").unwrap_or(0);
-    let created_at: String = row.try_get("created_at").unwrap_or_default();
-    let updated_at: String = row.try_get("updated_at").unwrap_or_default();
-
-    Ok(HabitCheckIn {
-        id: final_id,
-        habit_id,
-        date,
-        completed: final_completed != 0,
-        created_at,
-        updated_at,
-    })
+    Err(crate::error::AppError("habit_toggle_checkin: row not found after upsert".into()))
 }

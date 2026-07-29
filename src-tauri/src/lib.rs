@@ -1,7 +1,6 @@
 mod daily_review;
 mod db;
 mod dictionary;
-pub mod entities;
 mod error;
 mod file_dialog;
 mod habit;
@@ -13,8 +12,10 @@ mod reminder_scheduler;
 mod schema;
 mod sync;
 mod time_management;
+mod turso_state;
 
 use tauri::Manager;
+use turso_state::TursoDb;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -49,31 +50,52 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // 平台无关的应用数据目录：移动端 mysql.config.json 读写与词典库拷贝都落在这里
+            // 平台无关的应用数据目录
             if let Ok(dir) = app.path().app_data_dir() {
                 db::set_app_config_dir(dir);
             }
 
-            // Establish local SQLite connection (offline-first primary storage)
+            // Establish libsql Database connection (embedded replica or local).
+            // libsql's embedded replica init involves deep async call chains that can
+            // overflow Windows' default 1 MB main-thread stack → run in a dedicated
+            // thread with a 32 MB stack and block until it finishes.
             let handle = app.handle().clone();
-            let sqlite_pool = tauri::async_runtime::block_on(async {
-                let pool = local_db::establish_local_connection(&handle)
-                    .await
-                    .expect("Failed to connect to local SQLite database");
-                schema::ensure_local_tables(&pool)
-                    .await
-                    .expect("Failed to initialize local SQLite tables");
-                pool
-            });
-            app.manage(sqlite_pool.clone());
+            let handle_clone = handle.clone();
+            let turso_db = std::thread::Builder::new()
+                .name("db-setup".to_string())
+                .stack_size(32 * 1024 * 1024) // 32 MB
+                .spawn(move || {
+                    tauri::async_runtime::block_on(async move {
+                        let db = local_db::establish_local_connection(&handle_clone)
+                            .await
+                            .expect("Failed to connect to database");
+
+                        // Run schema DDL and migrations using a fresh connection
+                        let conn = db.connect().expect("Failed to get connection for schema setup");
+                        schema::ensure_local_tables(&conn)
+                            .await
+                            .expect("Failed to initialize tables");
+
+                        // Initial pull from Turso cloud (no-op if local-only mode)
+                        if let Err(e) = db.sync().await {
+                            eprintln!("[DB] Initial sync skipped or failed: {}", e);
+                        } else {
+                            println!("[DB] Initial sync from Turso cloud completed.");
+                        }
+
+                        TursoDb::new(db)
+                    })
+                })
+                .expect("Failed to spawn db-setup thread")
+                .join()
+                .expect("DB setup thread panicked");
+
+            app.manage(turso_db);
 
             // Start native Rust task reminder scheduler background loop
-            reminder_scheduler::start_reminder_scheduler(app.handle().clone(), sqlite_pool.clone());
-
-            let turso_cfg = db::read_turso_config();
-            if let Some(ref url) = turso_cfg.url {
-                println!("Turso cloud sync engine active. Target URL: {}", url);
-            }
+            let turso_state = app.state::<TursoDb>();
+            let db_for_reminder = turso_state.inner().clone();
+            reminder_scheduler::start_reminder_scheduler(app.handle().clone(), db_for_reminder);
 
             Ok(())
         })
@@ -86,6 +108,7 @@ pub fn run() {
             db::db_save_turso_config,
             db::db_get_preference,
             db::db_set_preference,
+            db::db_sync_now,
             time_management::tm_load_all,
             time_management::tm_upsert_task,
             time_management::tm_delete_task,
@@ -136,3 +159,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

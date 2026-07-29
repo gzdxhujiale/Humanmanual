@@ -1,8 +1,9 @@
 use chrono::{Datelike, Local, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
+
+use crate::turso_state::TursoDb;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskReminderConfig {
@@ -82,14 +83,19 @@ fn build_deadline_body(task_title: &str, target_date: NaiveDate, deadline_ms: Op
     format!("「{}」{}（{}）", task_title, when, formatted_date)
 }
 
-pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool) {
-    let rows = match sqlx::query(
-        "SELECT id, title, deadline, scheduled_date, created_at, reminder 
-         FROM time_management_tasks 
-         WHERE completed = 0 AND deleted_at IS NULL AND reminder IS NOT NULL AND reminder != ''"
-    )
-    .fetch_all(pool)
-    .await {
+pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
+    let conn = match turso.conn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[ReminderScheduler] Failed to get DB connection: {}", e);
+            return;
+        }
+    };
+
+    let mut rows = match conn.query(
+        "SELECT id, title, deadline, scheduled_date, created_at, reminder FROM time_management_tasks WHERE completed = 0 AND deleted_at IS NULL AND reminder IS NOT NULL AND reminder != ''",
+        (),
+    ).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[ReminderScheduler] DB query error: {}", e);
@@ -102,14 +108,18 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool)
     let today_str = today.format("%Y-%m-%d").to_string();
     let current_hm = (now_local.hour(), now_local.minute());
 
-    for row in rows {
-        let id: String = row.try_get("id").unwrap_or_default();
-        let title: String = row.try_get("title").unwrap_or_default();
-        let deadline: Option<i64> = row.try_get("deadline").ok();
-        let scheduled_date: Option<String> = row.try_get("scheduled_date").ok();
-        let created_at: i64 = row.try_get("created_at").unwrap_or(0);
-        let reminder_raw: String = row.try_get("reminder").unwrap_or_default();
+    let mut tasks = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        let id: String = row.get(0).unwrap_or_default();
+        let title: String = row.get(1).unwrap_or_default();
+        let deadline: Option<i64> = row.get(2).ok();
+        let scheduled_date: Option<String> = row.get(3).ok();
+        let created_at: i64 = row.get(4).unwrap_or(0);
+        let reminder_raw: String = row.get(5).unwrap_or_default();
+        tasks.push((id, title, deadline, scheduled_date, created_at, reminder_raw));
+    }
 
+    for (id, title, deadline, scheduled_date, created_at, reminder_raw) in tasks {
         let r = match parse_reminder(&reminder_raw) {
             Some(r) => r,
             None => continue,
@@ -118,7 +128,6 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool)
         let target_date = get_task_target_date(deadline, scheduled_date.as_deref(), created_at);
         let remind_day = target_date - chrono::Duration::days(r.offset_days);
 
-        // Check if today is within the reminder window
         if today < remind_day || today > target_date {
             continue;
         }
@@ -126,7 +135,6 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool)
             continue;
         }
 
-        // Parse reminder time "HH:mm"
         let parts: Vec<&str> = r.time.split(':').collect();
         if parts.len() != 2 {
             continue;
@@ -134,37 +142,33 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool)
         let target_h: u32 = parts[0].parse().unwrap_or(0);
         let target_m: u32 = parts[1].parse().unwrap_or(0);
 
-        // Has the fire time arrived today?
         if current_hm < (target_h, target_m) {
             continue;
         }
 
-        let key = format!("{}@{}:{}_{}", id, today_str, r.offset_days, r.time);
+        let key = format!("{}@{}:{}", id, today_str, r.offset_days);
 
-        // Check if already fired
-        let fired_exists: bool = sqlx::query("SELECT 1 FROM task_reminder_fired WHERE key = ?")
-            .bind(&key)
-            .fetch_optional(pool)
-            .await
-            .map(|opt| opt.is_some())
-            .unwrap_or(false);
+        let mut fired_rows = match conn.query(
+            "SELECT 1 FROM task_reminder_fired WHERE key = ?1",
+            libsql::params![key.clone()],
+        ).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
 
-        if fired_exists {
+        if let Ok(Some(_)) = fired_rows.next().await {
             continue;
         }
 
-        // Record as fired first to avoid duplicate firing
         let now_ms = now_local.timestamp_millis();
-        let _ = sqlx::query("INSERT OR REPLACE INTO task_reminder_fired (key, fired_at) VALUES (?, ?)")
-            .bind(&key)
-            .bind(now_ms)
-            .execute(pool)
-            .await;
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO task_reminder_fired (key, fired_at) VALUES (?1, ?2)",
+            libsql::params![key, now_ms],
+        ).await;
 
         let days_left = (target_date - today).num_days();
         let body = build_deadline_body(&title, target_date, deadline, days_left);
 
-        // Dispatch OS notification via tauri_plugin_notification
         let res = app_handle
             .notification()
             .builder()
@@ -179,23 +183,21 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, pool: &SqlitePool)
         }
     }
 
-    // Clean up fired logs older than 14 days
     let cutoff = (now_local - chrono::Duration::days(14)).timestamp_millis();
-    let _ = sqlx::query("DELETE FROM task_reminder_fired WHERE fired_at < ?")
-        .bind(cutoff)
-        .execute(pool)
-        .await;
+    let _ = conn.execute(
+        "DELETE FROM task_reminder_fired WHERE fired_at < ?1",
+        libsql::params![cutoff],
+    ).await;
 }
 
-pub fn start_reminder_scheduler(app_handle: AppHandle, pool: SqlitePool) {
+pub fn start_reminder_scheduler(app_handle: AppHandle, turso: TursoDb) {
     tauri::async_runtime::spawn(async move {
-        // Sleep 5s initially to allow app to finish boot and SQLite setup
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             interval.tick().await;
-            check_and_send_reminders(&app_handle, &pool).await;
+            check_and_send_reminders(&app_handle, &turso).await;
         }
     });
 }

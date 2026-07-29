@@ -5,10 +5,10 @@
 // 3. Caches successful lookups locally into SQLite so subsequent lookups are instant.
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::turso_state::TursoDb;
 
 /// A bilingual example sentence pair.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
@@ -54,60 +54,48 @@ pub struct DictEntry {
 }
 
 #[tauri::command]
-pub async fn dict_lookup(word: String, pool: State<'_, SqlitePool>) -> AppResult<DictEntry> {
+pub async fn dict_lookup(word: String, db: State<'_, TursoDb>) -> AppResult<DictEntry> {
     let query = word.trim().to_lowercase();
     if query.is_empty() {
         return Err("请输入要查询的单词".into());
     }
 
     // 1. Check local SQLite dict_cache table first
-    if let Ok(Some(row)) = sqlx::query(
-        "SELECT word, phonetic, definition, translation, pos, tag, exchange, collins, oxford FROM dict_cache WHERE word = ? LIMIT 1"
-    )
-    .bind(&query)
-    .fetch_optional(&*pool)
-    .await
-    {
-        let word_val: String = row.try_get("word").unwrap_or_default();
-        let audio_base = format!("https://dict.youdao.com/dictvoice?audio={}", urlencoding_simple(&word_val));
-        return Ok(DictEntry {
-            word: word_val,
-            phonetic: row.try_get("phonetic").unwrap_or_default(),
-            us_audio: Some(format!("{}&type=2", audio_base)),
-            uk_audio: Some(format!("{}&type=1", audio_base)),
-            definition: row.try_get("definition").unwrap_or_default(),
-            translation: row.try_get("translation").unwrap_or_default(),
-            pos: row.try_get("pos").unwrap_or_default(),
-            tag: row.try_get("tag").unwrap_or_default(),
-            exchange: row.try_get("exchange").unwrap_or_default(),
-            collins: row.try_get("collins").unwrap_or(0),
-            oxford: row.try_get("oxford").unwrap_or(0),
-            found: true,
-            ..Default::default()
-        });
+    let conn = db.conn()?;
+    let mut cache_rows = conn.query(
+        "SELECT word, phonetic, definition, translation, pos, tag, exchange, collins, oxford FROM dict_cache WHERE word = ?1 LIMIT 1",
+        libsql::params![query.clone()],
+    ).await;
+    if let Ok(ref mut rows) = cache_rows {
+        if let Ok(Some(row)) = rows.next().await {
+            let word_val: String = row.get(0).unwrap_or_default();
+            let audio_base = format!("https://dict.youdao.com/dictvoice?audio={}", urlencoding_simple(&word_val));
+            return Ok(DictEntry {
+                word: word_val,
+                phonetic: row.get(1).unwrap_or_default(),
+                us_audio: Some(format!("{}&type=2", audio_base)),
+                uk_audio: Some(format!("{}&type=1", audio_base)),
+                definition: row.get(2).unwrap_or_default(),
+                translation: row.get(3).unwrap_or_default(),
+                pos: row.get(4).unwrap_or_default(),
+                tag: row.get(5).unwrap_or_default(),
+                exchange: row.get(6).unwrap_or_default(),
+                collins: row.get(7).unwrap_or(0),
+                oxford: row.get(8).unwrap_or(0),
+                found: true,
+                ..Default::default()
+            });
+        }
     }
 
     // 2. Fetch from Youdao Public Web API (no key required)
     match fetch_youdao_online(&query).await {
         Ok(entry) if entry.found => {
             let now = crate::sync::now_iso();
-            let _ = sqlx::query(
-                "INSERT INTO dict_cache (word, phonetic, definition, translation, pos, tag, exchange, collins, oxford, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, translation = excluded.translation, pos = excluded.pos"
-            )
-            .bind(&entry.word)
-            .bind(&entry.phonetic)
-            .bind(&entry.definition)
-            .bind(&entry.translation)
-            .bind(&entry.pos)
-            .bind(&entry.tag)
-            .bind(&entry.exchange)
-            .bind(entry.collins)
-            .bind(entry.oxford)
-            .bind(&now)
-            .execute(&*pool)
-            .await;
+            let _ = conn.execute(
+                "INSERT INTO dict_cache (word, phonetic, definition, translation, pos, tag, exchange, collins, oxford, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, translation = excluded.translation, pos = excluded.pos",
+                libsql::params![entry.word.clone(), entry.phonetic.clone(), entry.definition.clone(), entry.translation.clone(), entry.pos.clone(), entry.tag.clone(), entry.exchange.clone(), entry.collins, entry.oxford, now],
+            ).await;
 
             Ok(entry)
         }

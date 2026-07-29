@@ -24,8 +24,8 @@ impl Serialize for AppError {
     }
 }
 
-impl From<sqlx::Error> for AppError {
-    fn from(e: sqlx::Error) -> Self {
+impl From<libsql::Error> for AppError {
+    fn from(e: libsql::Error) -> Self {
         AppError(e.to_string())
     }
 }

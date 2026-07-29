@@ -1,10 +1,9 @@
-use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
+﻿use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::TidbState;
 use crate::error::AppResult;
 use crate::sync::now_iso;
+use crate::turso_state::TursoDb;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkedTarget {
@@ -63,251 +62,114 @@ pub struct PomodoroData {
 }
 
 #[tauri::command]
-pub async fn pomodoro_load_all(pool: State<'_, SqlitePool>) -> AppResult<PomodoroData> {
-    let records_rows = sqlx::query(
-        r#"
-        SELECT id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at
-        FROM pomodoro_records
-        WHERE deleted_at IS NULL
-        ORDER BY start_time DESC
-        "#,
-    )
-    .fetch_all(&*pool)
-    .await?;
+pub async fn pomodoro_load_all(db: State<'_, TursoDb>) -> AppResult<PomodoroData> {
+    let conn = db.conn()?;
+    let mut records_rows = conn.query(
+        "SELECT id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at FROM pomodoro_records WHERE deleted_at IS NULL ORDER BY start_time DESC",
+        (),
+    ).await?;
 
-    let records = records_rows
-        .into_iter()
-        .map(|row| {
-            let id: String = row.try_get("id").unwrap_or_default();
-            let mode: String = row.try_get("mode").unwrap_or_default();
-            let phase: String = row.try_get("phase").unwrap_or_default();
-            let start_time: String = row.try_get("start_time").unwrap_or_default();
-            let end_time: String = row.try_get("end_time").unwrap_or_default();
-            let duration_minutes: i64 = row.try_get("duration_minutes").unwrap_or(0);
-            let date: String = row.try_get("date").unwrap_or_default();
-            let date_label: String = row.try_get("date_label").unwrap_or_default();
-            let time_range_label: String = row.try_get("time_range_label").unwrap_or_default();
-            let task_id: Option<String> = row.try_get("task_id").ok().flatten();
-            let linked_target_str: Option<String> = row.try_get("linked_target").ok().flatten();
-            let linked_target = linked_target_str
-                .and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
-            let created_at: String = row.try_get("created_at").unwrap_or_default();
+    let mut records = Vec::new();
+    while let Ok(Some(row)) = records_rows.next().await {
+        let linked_target_str: Option<String> = row.get(10).ok();
+        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
+        records.push(PomodoroRecord {
+            id: row.get(0).unwrap_or_default(),
+            mode: row.get(1).unwrap_or_default(),
+            phase: row.get(2).unwrap_or_default(),
+            start_time: row.get(3).unwrap_or_default(),
+            end_time: row.get(4).unwrap_or_default(),
+            duration_minutes: row.get(5).unwrap_or(0),
+            date: row.get(6).unwrap_or_default(),
+            date_label: row.get(7).unwrap_or_default(),
+            time_range_label: row.get(8).unwrap_or_default(),
+            task_id: row.get(9).ok(),
+            linked_target,
+            created_at: row.get(11).unwrap_or_default(),
+        });
+    }
 
-            PomodoroRecord {
-                id,
-                mode,
-                phase,
-                start_time,
-                end_time,
-                duration_minutes,
-                date,
-                date_label,
-                time_range_label,
-                task_id,
-                linked_target,
-                created_at,
-            }
-        })
-        .collect();
+    let conn2 = db.conn()?;
+    let mut favs_rows = conn2.query(
+        "SELECT id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at FROM pomodoro_favorites WHERE deleted_at IS NULL ORDER BY created_at DESC",
+        (),
+    ).await?;
 
-    let favs_rows = sqlx::query(
-        r#"
-        SELECT id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at
-        FROM pomodoro_favorites
-        WHERE deleted_at IS NULL
-        ORDER BY created_at DESC
-        "#,
-    )
-    .fetch_all(&*pool)
-    .await?;
+    let mut favorite_tasks = Vec::new();
+    while let Ok(Some(row)) = favs_rows.next().await {
+        let linked_target_str: Option<String> = row.get(6).ok();
+        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
+        let is_archived_val: i32 = row.get(7).unwrap_or(0);
+        favorite_tasks.push(FavoriteFocusTask {
+            id: row.get(0).unwrap_or_default(),
+            name: row.get(1).unwrap_or_default(),
+            icon: row.get(2).unwrap_or_else(|_| "😊".to_string()),
+            mode: row.get(3).unwrap_or_default(),
+            duration_minutes: row.get(4).unwrap_or(25),
+            accumulated_minutes: row.get(5).unwrap_or(0),
+            linked_target,
+            is_archived: is_archived_val != 0,
+            created_at: row.get(8).unwrap_or_default(),
+        });
+    }
 
-    let favorite_tasks = favs_rows
-        .into_iter()
-        .map(|row| {
-            let id: String = row.try_get("id").unwrap_or_default();
-            let name: String = row.try_get("name").unwrap_or_default();
-            let icon: String = row.try_get("icon").unwrap_or_else(|_| "😊".to_string());
-            let mode: String = row.try_get("mode").unwrap_or_default();
-            let duration_minutes: i64 = row.try_get("duration_minutes").unwrap_or(25);
-            let accumulated_minutes: i64 = row.try_get("accumulated_minutes").unwrap_or(0);
-            let linked_target_str: Option<String> = row.try_get("linked_target").ok().flatten();
-            let linked_target = linked_target_str
-                .and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
-            let is_archived_val: i32 = row.try_get("is_archived").unwrap_or(0);
-            let created_at: String = row.try_get("created_at").unwrap_or_default();
-
-            FavoriteFocusTask {
-                id,
-                name,
-                icon,
-                mode,
-                duration_minutes,
-                accumulated_minutes,
-                linked_target,
-                is_archived: is_archived_val != 0,
-                created_at,
-            }
-        })
-        .collect();
-
-    Ok(PomodoroData {
-        records,
-        favorite_tasks,
-    })
+    Ok(PomodoroData { records, favorite_tasks })
 }
 
 #[tauri::command]
-pub async fn pomodoro_upsert_record(
-    record: PomodoroRecord,
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>,
-) -> AppResult<()> {
-    let linked_target_json = record
-        .linked_target
-        .as_ref()
-        .and_then(|t| serde_json::to_string(t).ok());
-
+pub async fn pomodoro_upsert_record(record: PomodoroRecord, db: State<'_, TursoDb>) -> AppResult<()> {
+    let linked_target_json = record.linked_target.as_ref().and_then(|t| serde_json::to_string(t).ok());
     let now = now_iso();
-    sqlx::query(
-        r#"
-        INSERT INTO pomodoro_records (
-            id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            mode = excluded.mode,
-            phase = excluded.phase,
-            start_time = excluded.start_time,
-            end_time = excluded.end_time,
-            duration_minutes = excluded.duration_minutes,
-            date = excluded.date,
-            date_label = excluded.date_label,
-            time_range_label = excluded.time_range_label,
-            task_id = excluded.task_id,
-            linked_target = excluded.linked_target,
-            updated_at = excluded.updated_at
-        "#,
-    )
-    .bind(&record.id)
-    .bind(&record.mode)
-    .bind(&record.phase)
-    .bind(&record.start_time)
-    .bind(&record.end_time)
-    .bind(record.duration_minutes)
-    .bind(&record.date)
-    .bind(&record.date_label)
-    .bind(&record.time_range_label)
-    .bind(&record.task_id)
-    .bind(&linked_target_json)
-    .bind(&record.created_at)
-    .bind(&now)
-    .execute(&*pool)
-    .await?;
-
-    crate::sync::record_outbox_event(pool.inner(), "pomodoro_records", &record.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO pomodoro_records (id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT(id) DO UPDATE SET mode = excluded.mode, phase = excluded.phase, start_time = excluded.start_time, end_time = excluded.end_time, duration_minutes = excluded.duration_minutes, date = excluded.date, date_label = excluded.date_label, time_range_label = excluded.time_range_label, task_id = excluded.task_id, linked_target = excluded.linked_target, updated_at = excluded.updated_at",
+        libsql::params![record.id, record.mode, record.phase, record.start_time, record.end_time, record.duration_minutes, record.date, record.date_label, record.time_range_label, record.task_id, linked_target_json, record.created_at, now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pomodoro_delete_record(
-    id: String,
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>,
-) -> AppResult<()> {
+pub async fn pomodoro_delete_record(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE pomodoro_records SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(&now)
-        .bind(&id)
-        .execute(&*pool)
-        .await?;
-
-    crate::sync::record_outbox_event(pool.inner(), "pomodoro_records", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-
+    let conn = db.conn()?;
+    conn.execute(
+        "UPDATE pomodoro_records SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pomodoro_clear_all_records(
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>,
-) -> AppResult<()> {
+pub async fn pomodoro_clear_all_records(db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE pomodoro_records SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL")
-        .bind(&now)
-        .bind(&now)
-        .execute(&*pool)
-        .await?;
-
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-
+    let conn = db.conn()?;
+    conn.execute(
+        "UPDATE pomodoro_records SET deleted_at = ?1, updated_at = ?2 WHERE deleted_at IS NULL",
+        libsql::params![now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pomodoro_upsert_favorite(
-    task: FavoriteFocusTask,
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>,
-) -> AppResult<()> {
-    let linked_target_json = task
-        .linked_target
-        .as_ref()
-        .and_then(|t| serde_json::to_string(t).ok());
+pub async fn pomodoro_upsert_favorite(task: FavoriteFocusTask, db: State<'_, TursoDb>) -> AppResult<()> {
+    let linked_target_json = task.linked_target.as_ref().and_then(|t| serde_json::to_string(t).ok());
     let is_archived_val = if task.is_archived { 1i32 } else { 0i32 };
     let now = now_iso();
-
-    sqlx::query(
-        r#"
-        INSERT INTO pomodoro_favorites (
-            id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            icon = excluded.icon,
-            mode = excluded.mode,
-            duration_minutes = excluded.duration_minutes,
-            accumulated_minutes = excluded.accumulated_minutes,
-            linked_target = excluded.linked_target,
-            is_archived = excluded.is_archived,
-            updated_at = excluded.updated_at
-        "#,
-    )
-    .bind(&task.id)
-    .bind(&task.name)
-    .bind(&task.icon)
-    .bind(&task.mode)
-    .bind(task.duration_minutes)
-    .bind(task.accumulated_minutes)
-    .bind(&linked_target_json)
-    .bind(is_archived_val)
-    .bind(&task.created_at)
-    .bind(&now)
-    .execute(&*pool)
-    .await?;
-
-    crate::sync::record_outbox_event(pool.inner(), "pomodoro_favorites", &task.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO pomodoro_favorites (id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, mode = excluded.mode, duration_minutes = excluded.duration_minutes, accumulated_minutes = excluded.accumulated_minutes, linked_target = excluded.linked_target, is_archived = excluded.is_archived, updated_at = excluded.updated_at",
+        libsql::params![task.id, task.name, task.icon, task.mode, task.duration_minutes, task.accumulated_minutes, linked_target_json, is_archived_val, task.created_at, now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pomodoro_delete_favorite(
-    id: String,
-    pool: State<'_, SqlitePool>,
-    tidb_state: State<'_, TidbState>,
-) -> AppResult<()> {
+pub async fn pomodoro_delete_favorite(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE pomodoro_favorites SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(&now)
-        .bind(&id)
-        .execute(&*pool)
-        .await?;
-
-    crate::sync::record_outbox_event(pool.inner(), "pomodoro_favorites", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
-
+    let conn = db.conn()?;
+    conn.execute(
+        "UPDATE pomodoro_favorites SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id],
+    ).await?;
     Ok(())
 }

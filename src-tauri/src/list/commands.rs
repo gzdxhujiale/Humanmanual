@@ -1,114 +1,105 @@
-// Load + CRUD commands for the lists module.
-// Soft-deletes (deleted_at) propagate to the cloud through push_to_tidb's
-// upsert pass. HARD deletes on synced tables (list_templates, list_note_groups)
-// must go through queue_and_sync_delete, otherwise pull_from_tidb resurrects
-// the deleted rows on next startup.
+﻿// Load + CRUD commands for the lists module.
 
-use sqlx::{Row, SqlitePool};
 use tauri::State;
 
 use super::types::*;
-use crate::db::TidbState;
 use crate::error::AppResult;
 use crate::sync::{now_iso, now_ms};
+use crate::turso_state::TursoDb;
 
 // ── Load all ──
 
 #[tauri::command]
-pub async fn list_load_all(pool: State<'_, SqlitePool>) -> AppResult<ListAllData> {
-    // Folders
-    let folder_rows = sqlx::query(
-        "SELECT id, name, is_pinned, sort_order FROM list_folders WHERE deleted_at IS NULL ORDER BY sort_order"
-    ).fetch_all(&*pool).await?;
+pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
+    let conn = db.conn()?;
 
-    let folders = folder_rows
-        .into_iter()
-        .map(|row| ListFolder {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            is_pinned: row.try_get::<i32, _>("is_pinned").map(|v| v != 0).unwrap_or(false),
-            sort_order: row.try_get("sort_order").unwrap_or(0),
-        })
-        .collect();
+    // Folders
+    let mut folder_rows = conn.query(
+        "SELECT id, name, is_pinned, sort_order FROM list_folders WHERE deleted_at IS NULL ORDER BY sort_order",
+        (),
+    ).await?;
+    let mut folders = Vec::new();
+    while let Ok(Some(row)) = folder_rows.next().await {
+        let is_pinned_i: i32 = row.get(2).unwrap_or(0);
+        folders.push(ListFolder {
+            id: row.get(0).unwrap_or_default(),
+            name: row.get(1).unwrap_or_default(),
+            is_pinned: is_pinned_i != 0,
+            sort_order: row.get(3).unwrap_or(0),
+        });
+    }
 
     // Lists with item_count
-    let list_rows = sqlx::query(
-        "SELECT l.id, l.name, l.icon, l.color, l.view_type, l.folder_id, l.is_pinned, l.sort_order,
-                COALESCE(n.cnt, 0) AS item_count
-         FROM list_lists l
-         LEFT JOIN (SELECT list_id, COUNT(*) AS cnt FROM list_notes WHERE deleted_at IS NULL GROUP BY list_id) n
-           ON n.list_id = l.id
-         WHERE l.deleted_at IS NULL
-         ORDER BY l.is_pinned DESC, l.sort_order"
-    ).fetch_all(&*pool).await?;
-
-    let lists = list_rows
-        .into_iter()
-        .map(|row| ListList {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            icon: row.try_get("icon").unwrap_or_default(),
-            color: row.try_get("color").unwrap_or_default(),
-            view_type: row.try_get("view_type").unwrap_or_else(|_| "list".to_string()),
-            folder_id: row.try_get("folder_id").unwrap_or(None),
-            is_pinned: row.try_get::<i32, _>("is_pinned").map(|v| v != 0).unwrap_or(false),
-            sort_order: row.try_get("sort_order").unwrap_or(0),
-            item_count: row.try_get::<i32, _>("item_count").unwrap_or(0) as i64,
-        })
-        .collect();
+    let conn2 = db.conn()?;
+    let mut list_rows = conn2.query(
+        "SELECT l.id, l.name, l.icon, l.color, l.view_type, l.folder_id, l.is_pinned, l.sort_order, COALESCE(n.cnt, 0) AS item_count FROM list_lists l LEFT JOIN (SELECT list_id, COUNT(*) AS cnt FROM list_notes WHERE deleted_at IS NULL GROUP BY list_id) n ON n.list_id = l.id WHERE l.deleted_at IS NULL ORDER BY l.is_pinned DESC, l.sort_order",
+        (),
+    ).await?;
+    let mut lists = Vec::new();
+    while let Ok(Some(row)) = list_rows.next().await {
+        let is_pinned_i: i32 = row.get(6).unwrap_or(0);
+        lists.push(ListList {
+            id: row.get(0).unwrap_or_default(),
+            name: row.get(1).unwrap_or_default(),
+            icon: row.get(2).unwrap_or_default(),
+            color: row.get(3).unwrap_or_default(),
+            view_type: row.get(4).unwrap_or_else(|_| "list".to_string()),
+            folder_id: row.get(5).ok(),
+            is_pinned: is_pinned_i != 0,
+            sort_order: row.get(7).unwrap_or(0),
+            item_count: row.get(8).unwrap_or(0),
+        });
+    }
 
     // Note groups
-    let group_rows = sqlx::query(
-        "SELECT id, list_id, name, sort_order FROM list_note_groups WHERE deleted_at IS NULL ORDER BY sort_order"
-    ).fetch_all(&*pool).await?;
-
-    let note_groups = group_rows
-        .into_iter()
-        .map(|row| ListNoteGroup {
-            id: row.try_get("id").unwrap_or_default(),
-            list_id: row.try_get("list_id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            sort_order: row.try_get("sort_order").unwrap_or(0),
-        })
-        .collect();
+    let conn3 = db.conn()?;
+    let mut group_rows = conn3.query(
+        "SELECT id, list_id, name, sort_order FROM list_note_groups WHERE deleted_at IS NULL ORDER BY sort_order",
+        (),
+    ).await?;
+    let mut note_groups = Vec::new();
+    while let Ok(Some(row)) = group_rows.next().await {
+        note_groups.push(ListNoteGroup {
+            id: row.get(0).unwrap_or_default(),
+            list_id: row.get(1).unwrap_or_default(),
+            name: row.get(2).unwrap_or_default(),
+            sort_order: row.get(3).unwrap_or(0),
+        });
+    }
 
     // Notes
-    let note_rows = sqlx::query(
-        "SELECT id, list_id, group_id, title, content, is_pinned, sort_order,
-                CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at_ms,
-                CAST(strftime('%s', updated_at) * 1000 AS INTEGER) AS updated_at_ms
-         FROM list_notes WHERE deleted_at IS NULL
-         ORDER BY is_pinned DESC, sort_order, updated_at DESC"
-    ).fetch_all(&*pool).await?;
-
-    let notes = note_rows
-        .into_iter()
-        .map(|row| ListNote {
-            id: row.try_get("id").unwrap_or_default(),
-            list_id: row.try_get("list_id").unwrap_or_default(),
-            group_id: row.try_get("group_id").unwrap_or(None),
-            title: row.try_get("title").unwrap_or_default(),
-            content: row.try_get("content").unwrap_or_default(),
-            is_pinned: row.try_get::<i32, _>("is_pinned").map(|v| v != 0).unwrap_or(false),
-            sort_order: row.try_get("sort_order").unwrap_or(0),
-            created_at: row.try_get::<i64, _>("created_at_ms").unwrap_or(0),
-            updated_at: row.try_get::<i64, _>("updated_at_ms").unwrap_or(0),
-        })
-        .collect();
+    let conn4 = db.conn()?;
+    let mut note_rows = conn4.query(
+        "SELECT id, list_id, group_id, title, content, is_pinned, sort_order, CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at_ms, CAST(strftime('%s', updated_at) * 1000 AS INTEGER) AS updated_at_ms FROM list_notes WHERE deleted_at IS NULL ORDER BY is_pinned DESC, sort_order, updated_at DESC",
+        (),
+    ).await?;
+    let mut notes = Vec::new();
+    while let Ok(Some(row)) = note_rows.next().await {
+        let is_pinned_i: i32 = row.get(5).unwrap_or(0);
+        notes.push(ListNote {
+            id: row.get(0).unwrap_or_default(),
+            list_id: row.get(1).unwrap_or_default(),
+            group_id: row.get(2).ok(),
+            title: row.get(3).unwrap_or_default(),
+            content: row.get(4).unwrap_or_default(),
+            is_pinned: is_pinned_i != 0,
+            sort_order: row.get(6).unwrap_or(0),
+            created_at: row.get(7).unwrap_or(0),
+            updated_at: row.get(8).unwrap_or(0),
+        });
+    }
 
     // Templates
-    let tpl_rows = sqlx::query("SELECT id, name, content FROM list_templates WHERE deleted_at IS NULL")
-        .fetch_all(&*pool)
-        .await?;
-
-    let templates = tpl_rows
-        .into_iter()
-        .map(|row| ListTemplate {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            content: row.try_get("content").unwrap_or_default(),
-        })
-        .collect();
+    let conn5 = db.conn()?;
+    let mut tpl_rows = conn5.query("SELECT id, name, content FROM list_templates WHERE deleted_at IS NULL", ()).await?;
+    let mut templates = Vec::new();
+    while let Ok(Some(row)) = tpl_rows.next().await {
+        templates.push(ListTemplate {
+            id: row.get(0).unwrap_or_default(),
+            name: row.get(1).unwrap_or_default(),
+            content: row.get(2).unwrap_or_default(),
+        });
+    }
 
     Ok(ListAllData { folders, lists, note_groups, notes, templates })
 }
@@ -116,355 +107,232 @@ pub async fn list_load_all(pool: State<'_, SqlitePool>) -> AppResult<ListAllData
 // ── Folder CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_folder(folder: ListFolder, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_upsert_folder(folder: ListFolder, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if folder.is_pinned { 1 } else { 0 };
-    sqlx::query(
-        "INSERT INTO list_folders (id, name, is_pinned, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at"
-    )
-    .bind(&folder.id)
-    .bind(&folder.name)
-    .bind(pinned)
-    .bind(folder.sort_order)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_folders", &folder.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO list_folders (id, name, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
+        libsql::params![folder.id, folder.name, pinned, folder.sort_order, now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_folder(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_delete_folder(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    // Soft-delete folder
-    sqlx::query("UPDATE list_folders SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now).bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    // Unlink lists from folder
-    sqlx::query("UPDATE list_lists SET folder_id = NULL, updated_at = ? WHERE folder_id = ?")
-        .bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_folders", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_folders SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now.clone(), id.clone()]).await?;
+    conn.execute("UPDATE list_lists SET folder_id = NULL, updated_at = ?1 WHERE folder_id = ?2",
+        libsql::params![now, id]).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_folders(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_reorder_folders(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    let mut tx = pool.begin().await?;
+    let conn = db.conn()?;
     for (id, order) in &items {
-        sqlx::query("UPDATE list_folders SET sort_order = ?, updated_at = ? WHERE id = ?")
-            .bind(order).bind(&now).bind(id)
-            .execute(&mut *tx).await?;
-        crate::sync::record_outbox_event(pool.inner(), "list_folders", id, "upsert").await;
+        conn.execute("UPDATE list_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            libsql::params![*order, now.clone(), id.clone()]).await?;
     }
-    tx.commit().await?;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── List CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_list(list: ListList, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_upsert_list(list: ListList, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if list.is_pinned { 1 } else { 0 };
-    sqlx::query(
-        "INSERT INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name, icon = excluded.icon, color = excluded.color,
-            view_type = excluded.view_type, folder_id = excluded.folder_id,
-            is_pinned = excluded.is_pinned, sort_order = excluded.sort_order,
-            updated_at = excluded.updated_at"
-    )
-    .bind(&list.id)
-    .bind(&list.name)
-    .bind(&list.icon)
-    .bind(&list.color)
-    .bind(&list.view_type)
-    .bind(&list.folder_id)
-    .bind(pinned)
-    .bind(list.sort_order)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_lists", &list.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, color = excluded.color, view_type = excluded.view_type, folder_id = excluded.folder_id, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
+        libsql::params![list.id, list.name, list.icon, list.color, list.view_type, list.folder_id, pinned, list.sort_order, now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_list(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_delete_list(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    // Soft-delete list
-    sqlx::query("UPDATE list_lists SET deleted_at = ? WHERE id = ?")
-        .bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    // Soft-delete associated notes
-    sqlx::query("UPDATE list_notes SET deleted_at = ? WHERE list_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    // Soft-delete associated groups
-    sqlx::query("UPDATE list_note_groups SET deleted_at = ?, updated_at = ? WHERE list_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_lists", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_lists SET deleted_at = ?1 WHERE id = ?2",
+        libsql::params![now.clone(), id.clone()]).await?;
+    conn.execute("UPDATE list_notes SET deleted_at = ?1 WHERE list_id = ?2 AND deleted_at IS NULL",
+        libsql::params![now.clone(), id.clone()]).await?;
+    conn.execute("UPDATE list_note_groups SET deleted_at = ?1, updated_at = ?2 WHERE list_id = ?3 AND deleted_at IS NULL",
+        libsql::params![now.clone(), now, id]).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_lists(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_reorder_lists(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    let mut tx = pool.begin().await?;
+    let conn = db.conn()?;
     for (id, order) in &items {
-        sqlx::query("UPDATE list_lists SET sort_order = ?, updated_at = ? WHERE id = ?")
-            .bind(order).bind(&now).bind(id)
-            .execute(&mut *tx).await?;
-        crate::sync::record_outbox_event(pool.inner(), "list_lists", id, "upsert").await;
+        conn.execute("UPDATE list_lists SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            libsql::params![*order, now.clone(), id.clone()]).await?;
     }
-    tx.commit().await?;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_move_list(list_id: String, folder_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_move_list(list_id: String, folder_id: Option<String>, sort_order: i32, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE list_lists SET folder_id = ?, sort_order = ?, updated_at = ? WHERE id = ?")
-        .bind(&folder_id).bind(sort_order).bind(&now).bind(&list_id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_lists", &list_id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_lists SET folder_id = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
+        libsql::params![folder_id, sort_order, now, list_id]).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_duplicate_list(source_id: String, new_list: ListList, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_duplicate_list(source_id: String, new_list: ListList, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let now_ms_val = now_ms();
-    let mut tx = pool.begin().await?;
+    let conn = db.conn()?;
 
-    // Insert new list
     let pinned: i32 = if new_list.is_pinned { 1 } else { 0 };
-    sqlx::query(
-        "INSERT INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&new_list.id)
-    .bind(&new_list.name)
-    .bind(&new_list.icon)
-    .bind(&new_list.color)
-    .bind(&new_list.view_type)
-    .bind(&new_list.folder_id)
-    .bind(pinned)
-    .bind(new_list.sort_order)
-    .bind(&now)
-    .bind(&now)
-    .execute(&mut *tx).await?;
+    conn.execute(
+        "INSERT INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        libsql::params![new_list.id.clone(), new_list.name, new_list.icon, new_list.color, new_list.view_type, new_list.folder_id, pinned, new_list.sort_order, now.clone(), now.clone()],
+    ).await?;
 
     // Copy groups
-    let group_rows = sqlx::query("SELECT id, list_id, name, sort_order FROM list_note_groups WHERE list_id = ?")
-        .bind(&source_id)
-        .fetch_all(&mut *tx).await?;
+    let mut group_rows = conn.query(
+        "SELECT id, name, sort_order FROM list_note_groups WHERE list_id = ?1",
+        libsql::params![source_id.clone()],
+    ).await?;
 
     let mut group_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for row in &group_rows {
-        let old_id: String = row.try_get("id").unwrap_or_default();
+    let mut groups_to_insert = Vec::new();
+    while let Ok(Some(row)) = group_rows.next().await {
+        let old_id: String = row.get(0).unwrap_or_default();
+        let name: String = row.get(1).unwrap_or_default();
+        let sort_order: i32 = row.get(2).unwrap_or(0);
         let new_id = format!("group-{}-{}", now_ms_val, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
-        let name: String = row.try_get("name").unwrap_or_default();
-        let sort_order: i32 = row.try_get("sort_order").unwrap_or(0);
-
-        sqlx::query(
-            "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&new_id)
-        .bind(&new_list.id)
-        .bind(&name)
-        .bind(sort_order)
-        .bind(&now)
-        .bind(&now)
-        .execute(&mut *tx).await?;
-
-        group_id_map.insert(old_id, new_id);
+        group_id_map.insert(old_id, new_id.clone());
+        groups_to_insert.push((new_id, name, sort_order));
+    }
+    for (gid, name, sort_order) in &groups_to_insert {
+        conn.execute(
+            "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![gid.clone(), new_list.id.clone(), name.clone(), *sort_order, now.clone(), now.clone()],
+        ).await?;
     }
 
     // Copy notes
-    let note_rows = sqlx::query(
-        "SELECT id, group_id, title, content, is_pinned, sort_order FROM list_notes WHERE list_id = ? AND deleted_at IS NULL"
-    )
-    .bind(&source_id)
-    .fetch_all(&mut *tx).await?;
-
-    for row in &note_rows {
-        let old_group_id: Option<String> = row.try_get("group_id").unwrap_or(None);
+    let mut note_rows = conn.query(
+        "SELECT id, group_id, title, content, is_pinned, sort_order FROM list_notes WHERE list_id = ?1 AND deleted_at IS NULL",
+        libsql::params![source_id],
+    ).await?;
+    let mut notes_to_insert = Vec::new();
+    while let Ok(Some(row)) = note_rows.next().await {
+        let old_group_id: Option<String> = row.get(1).ok();
         let new_group_id = old_group_id.and_then(|gid| group_id_map.get(&gid).cloned());
         let new_note_id = format!("note-{}-{}", now_ms_val, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
-        let title: String = row.try_get("title").unwrap_or_default();
-        let content: String = row.try_get("content").unwrap_or_default();
-        let is_pinned: i32 = row.try_get::<i32, _>("is_pinned").unwrap_or(0);
-        let sort_order: i32 = row.try_get("sort_order").unwrap_or(0);
-
-        sqlx::query(
-            "INSERT INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&new_note_id)
-        .bind(&new_list.id)
-        .bind(&new_group_id)
-        .bind(&title)
-        .bind(&content)
-        .bind(is_pinned)
-        .bind(sort_order)
-        .bind(&now)
-        .bind(&now)
-        .execute(&mut *tx).await?;
+        let title: String = row.get(2).unwrap_or_default();
+        let content: String = row.get(3).unwrap_or_default();
+        let is_pinned: i32 = row.get(4).unwrap_or(0);
+        let sort_order: i32 = row.get(5).unwrap_or(0);
+        notes_to_insert.push((new_note_id, new_group_id, title, content, is_pinned, sort_order));
+    }
+    for (nid, group_id, title, content, is_pinned, sort_order) in &notes_to_insert {
+        conn.execute(
+            "INSERT INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            libsql::params![nid.clone(), new_list.id.clone(), group_id.clone(), title.clone(), content.clone(), *is_pinned, *sort_order, now.clone(), now.clone()],
+        ).await?;
     }
 
-    tx.commit().await?;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── Note CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_note(note: ListNote, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_upsert_note(note: ListNote, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let pinned: i32 = if note.is_pinned { 1 } else { 0 };
-    sqlx::query(
-        "INSERT INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            list_id = excluded.list_id, group_id = excluded.group_id,
-            title = excluded.title, content = excluded.content,
-            is_pinned = excluded.is_pinned, sort_order = excluded.sort_order,
-            updated_at = excluded.updated_at"
-    )
-    .bind(&note.id)
-    .bind(&note.list_id)
-    .bind(&note.group_id)
-    .bind(&note.title)
-    .bind(&note.content)
-    .bind(pinned)
-    .bind(note.sort_order)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_notes", &note.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO UPDATE SET list_id = excluded.list_id, group_id = excluded.group_id, title = excluded.title, content = excluded.content, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
+        libsql::params![note.id, note.list_id, note.group_id, note.title, note.content, pinned, note.sort_order, now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_note(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_delete_note(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE list_notes SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now).bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_notes", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_notes SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id]).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<String>, sort_order: i32, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<String>, sort_order: i32, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE list_notes SET list_id = ?, group_id = ?, sort_order = ?, updated_at = ? WHERE id = ?")
-        .bind(&list_id).bind(&group_id).bind(sort_order).bind(&now).bind(&note_id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_notes", &note_id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_notes SET list_id = ?1, group_id = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?5",
+        libsql::params![list_id, group_id, sort_order, now, note_id]).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_reorder_notes(items: Vec<(String, i32)>, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_reorder_notes(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    let mut tx = pool.begin().await?;
+    let conn = db.conn()?;
     for (id, order) in &items {
-        sqlx::query("UPDATE list_notes SET sort_order = ?, updated_at = ? WHERE id = ?")
-            .bind(order).bind(&now).bind(id)
-            .execute(&mut *tx).await?;
-        crate::sync::record_outbox_event(pool.inner(), "list_notes", id, "upsert").await;
+        conn.execute("UPDATE list_notes SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            libsql::params![*order, now.clone(), id.clone()]).await?;
     }
-    tx.commit().await?;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
     Ok(())
 }
 
 // ── Note Group CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_group(group: ListNoteGroup, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_upsert_group(group: ListNoteGroup, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query(
-        "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort_order = excluded.sort_order, updated_at = excluded.updated_at"
-    )
-    .bind(&group.id)
-    .bind(&group.list_id)
-    .bind(&group.name)
-    .bind(group.sort_order)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_note_groups", &group.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
+        libsql::params![group.id, group.list_id, group.name, group.sort_order, now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_group(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_delete_group(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    // Move notes in this group to ungrouped
-    sqlx::query("UPDATE list_notes SET group_id = NULL, updated_at = ? WHERE group_id = ? AND deleted_at IS NULL")
-        .bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    // Soft-delete the group
-    sqlx::query("UPDATE list_note_groups SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now).bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_note_groups", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_notes SET group_id = NULL, updated_at = ?1 WHERE group_id = ?2 AND deleted_at IS NULL",
+        libsql::params![now.clone(), id.clone()]).await?;
+    conn.execute("UPDATE list_note_groups SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id]).await?;
     Ok(())
 }
 
 // ── Template CRUD ──
 
 #[tauri::command]
-pub async fn list_upsert_template(template: ListTemplate, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_upsert_template(template: ListTemplate, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query(
-        "INSERT INTO list_templates (id, name, content, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, content = excluded.content, updated_at = excluded.updated_at"
-    )
-    .bind(&template.id)
-    .bind(&template.name)
-    .bind(&template.content)
-    .bind(&now)
-    .bind(&now)
-    .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_templates", &template.id, "upsert").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute(
+        "INSERT INTO list_templates (id, name, content, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET name = excluded.name, content = excluded.content, updated_at = excluded.updated_at",
+        libsql::params![template.id, template.name, template.content, now.clone(), now],
+    ).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_delete_template(id: String, pool: State<'_, SqlitePool>, tidb_state: State<'_, TidbState>) -> AppResult<()> {
+pub async fn list_delete_template(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
-    sqlx::query("UPDATE list_templates SET deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&now).bind(&now).bind(&id)
-        .execute(&*pool).await?;
-    crate::sync::record_outbox_event(pool.inner(), "list_templates", &id, "delete").await;
-    crate::db::trigger_background_push(tidb_state.inner(), pool.inner().clone());
+    let conn = db.conn()?;
+    conn.execute("UPDATE list_templates SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![now.clone(), now, id]).await?;
     Ok(())
 }
