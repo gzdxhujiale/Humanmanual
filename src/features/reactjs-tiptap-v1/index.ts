@@ -5,5 +5,7 @@ export { Editor as ReactjsTiptapEditor, Editor, default as EditorComponent } fro
 export type { ReactjsTiptapEditorProps } from './components/Editor/Editor';
 export { default as EditorClient } from './components/Editor/EditorClient';
 export { convertMarkdownToTipTapJson, convertTipTapJsonToMarkdown } from './jsonMarkdownAdapter';
+export { openWebviewPreviewWindow, formatPreviewUrl, extractDomain } from './lib/webviewPreviewService';
+
 
 
