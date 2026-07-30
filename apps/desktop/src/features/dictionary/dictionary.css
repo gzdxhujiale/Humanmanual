@@ -246,46 +246,7 @@
   color: var(--text-strong, #374151);
 }
 
-/* ===== 移动端词典 Bottom Sheet 抽屉（DictionaryOverlay）===== */
-.dict-overlay-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1100;
-  background: rgba(15, 23, 42, 0.45);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  animation: mobileFadeIn 180ms ease;
-}
 
-.dict-overlay-sheet {
-  width: 100%;
-  max-height: 85vh;
-  background: var(--surface-0, #ffffff);
-  border-top-left-radius: 20px;
-  border-top-right-radius: 20px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.2);
-  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  animation: mobileSlideUp 220ms cubic-bezier(0.16, 1, 0.3, 1);
-  overflow: hidden;
-}
-
-.dict-overlay-handle-bar {
-  display: flex;
-  justify-content: center;
-  padding: 8px 0 4px;
-}
-
-.dict-overlay-handle {
-  width: 38px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--line-medium, #cbd5e1);
-}
 
 
 /* Phonetic & Audio Buttons */

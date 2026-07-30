@@ -1,15 +1,12 @@
 import React, { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { ToolConfig } from "./types";
-import { isMobilePlatform } from "../../lib/platform";
 import { DesktopMenuBar, DesktopToolbar, type ToolbarProps } from "./DesktopLayout";
-import { MobileTabBar } from "./MobileLayout";
 import "./AppLayout.css";
 
 export type { ToolbarProps, ToolConfig };
 
 export const MenuBar: React.FC = () => {
-  if (isMobilePlatform()) return null;
   return <DesktopMenuBar />;
 };
 
@@ -36,7 +33,7 @@ export const AppLayout: React.FC<{
   }, []);
 
   return (
-    <div className={`app-layout${isMobilePlatform() ? " is-mobile" : ""}`}>
+    <div className="app-layout">
       <div className="app-layout-toolbar">{toolbar}</div>
       <div className="app-layout-body">
         <div className="app-layout-menubar">{menuBar}</div>
@@ -47,8 +44,5 @@ export const AppLayout: React.FC<{
 };
 
 export const Toolbar: React.FC<ToolbarProps> = (props) => {
-  if (isMobilePlatform()) {
-    return <MobileTabBar {...props} />;
-  }
   return <DesktopToolbar {...props} />;
 };

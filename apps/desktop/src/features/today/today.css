@@ -367,39 +367,4 @@
   .today-panel { padding: 20px; }
 }
 
-/* ===== 移动端专属适配 ===== */
-.today-panel.mobile {
-  padding: 16px 16px 32px;
-  height: 100%;
-  max-width: 100%;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
 
-.today-panel.mobile .today-header {
-  gap: 14px;
-  padding-bottom: 16px;
-}
-
-.today-panel.mobile .today-date-leaf {
-  padding: 6px 12px 8px;
-}
-
-.today-panel.mobile .today-date-leaf .day-num {
-  font-size: 38px;
-}
-
-.today-body.mobile-body {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  padding-top: 16px;
-  overflow: visible;
-  padding-bottom: 32px;
-}
-
-.today-mobile-side-section {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}

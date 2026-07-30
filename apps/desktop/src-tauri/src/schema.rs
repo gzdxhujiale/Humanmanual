@@ -3,15 +3,6 @@
 use std::collections::HashSet;
 use libsql::Connection;
 
-/// Tables mirrored between local SQLite and remote Turso.
-#[allow(dead_code)]
-pub const SYNCED_TABLES: &[&str] = &[
-    "time_management_tasks", "daily_reviews", "mission_statement",
-    "mission_roles", "mission_goals", "habits", "habit_checkins",
-    "pomodoro_records", "pomodoro_favorites", "list_folders",
-    "list_lists", "list_notes", "list_note_groups", "list_templates",
-];
-
 // ── Versioned Schema Migrations ──
 
 pub struct MigrationStep {
@@ -47,6 +38,8 @@ const COMMON_MIGRATIONS: &[MigrationStep] = &[
     MigrationStep { version: 24, name: "cleanup_orphan_checkins", sql: "DELETE FROM habit_checkins WHERE habit_id NOT IN (SELECT id FROM habits)" },
     MigrationStep { version: 25, name: "cleanup_orphan_groups", sql: "DELETE FROM list_note_groups WHERE list_id NOT IN (SELECT id FROM list_lists)" },
     MigrationStep { version: 26, name: "cleanup_orphan_note_groups_ref", sql: "UPDATE list_notes SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM list_note_groups)" },
+    MigrationStep { version: 27, name: "dict_cache_examples", sql: "ALTER TABLE dict_cache ADD COLUMN examples_json TEXT NOT NULL DEFAULT '[]'" },
+    MigrationStep { version: 28, name: "dict_cache_phrases", sql: "ALTER TABLE dict_cache ADD COLUMN phrases_json TEXT NOT NULL DEFAULT '[]'" },
 ];
 
 // ── Local SQLite schema (mirror of the tables above, plus sync_queue & indexes) ──
@@ -253,13 +246,6 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         deleted_at TEXT NULL
     )",
 
-    // ── 16. Sync State Metadata ──
-    "CREATE TABLE IF NOT EXISTS sync_state (
-        table_name TEXT NOT NULL PRIMARY KEY,
-        last_pulled_at TEXT NULL,
-        last_pushed_at TEXT NULL
-    )",
-
     // ── 17. Schema Migrations Metadata ──
     "CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER NOT NULL PRIMARY KEY,
@@ -278,6 +264,8 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         exchange TEXT NOT NULL DEFAULT '',
         collins INTEGER NOT NULL DEFAULT 0,
         oxford INTEGER NOT NULL DEFAULT 0,
+        examples_json TEXT NOT NULL DEFAULT '[]',
+        phrases_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
     )",
 
@@ -296,7 +284,7 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_habit_checkins_habit ON habit_checkins(habit_id)",
 ];
 
-pub const LATEST_SCHEMA_VERSION: i32 = 26;
+pub const LATEST_SCHEMA_VERSION: i32 = 28;
 
 /// Create all tables in the local SQLite database and run versioned migrations.
 pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error> {
@@ -322,12 +310,6 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
     for sql in SQLITE_DDL_STATEMENTS {
         conn.execute(sql, ()).await?;
     }
-
-    // SQLite defensive fixes: add missing columns if they don't exist (ignore errors)
-    let _ = conn.execute("ALTER TABLE pomodoro_favorites ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''", ()).await;
-    let _ = conn.execute("ALTER TABLE pomodoro_favorites ADD COLUMN deleted_at TEXT NULL", ()).await;
-    let _ = conn.execute("ALTER TABLE pomodoro_records ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''", ()).await;
-    let _ = conn.execute("ALTER TABLE pomodoro_records ADD COLUMN deleted_at TEXT NULL", ()).await;
 
     // Read applied migrations
     let mut applied_versions: HashSet<i32> = HashSet::new();
@@ -361,4 +343,5 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
 
     Ok(())
 }
+
 

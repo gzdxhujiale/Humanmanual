@@ -3,7 +3,6 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emitTo } from '@tauri-apps/api/event';
 import { logError, logWarn } from '@humanmanual/core';
 import { DictEntry } from './dictionaryTypes';
-import { isMobilePlatform } from '../../lib/platform';
 
 /** Single reusable label so Ctrl+L always reuses the same popup window. */
 export const DICTIONARY_WINDOW_LABEL = 'dictionary_win';
@@ -31,11 +30,6 @@ function buildUrl(initialWord: string): string {
  * On mobile there are no extra windows: the lookup opens the in-app overlay.
  */
 export async function openDictionaryWindow(initialWord: string = ''): Promise<void> {
-  if (isMobilePlatform()) {
-    const { useDictionaryOverlayStore } = await import('./DictionaryOverlay');
-    useDictionaryOverlayStore.getState().open(initialWord);
-    return;
-  }
   const label = DICTIONARY_WINDOW_LABEL;
   try {
     const existing = await WebviewWindow.getByLabel(label);

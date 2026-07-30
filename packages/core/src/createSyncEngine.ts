@@ -30,32 +30,41 @@ const DEFAULT_DELAY_MS = HIGH_FREQ_DELAY;
 
 export interface SyncEngine {
   schedule(key: string, persist: () => Promise<void>, delay?: number): void;
+  scheduleHighFreq(key: string, persist: () => Promise<void>): void;
+  scheduleLowFreq(key: string, persist: () => Promise<void>): void;
   cancel(key: string): void;
 }
 
 export function createSyncEngine(): SyncEngine {
   const timers = new Map<string, number>();
 
-  return {
-    schedule(key, persist, delay = DEFAULT_DELAY_MS) {
-      const existing = timers.get(key);
-      if (existing !== undefined) {
-        window.clearTimeout(existing);
+  const schedule = (key: string, persist: () => Promise<void>, delay = DEFAULT_DELAY_MS) => {
+    const existing = timers.get(key);
+    if (existing !== undefined) {
+      window.clearTimeout(existing);
+    }
+
+    const id = window.setTimeout(async () => {
+      try {
+        await persist();
+      } catch (err) {
+        logError('syncEngine', `persist failed for key "${key}"`, err);
+      } finally {
+        timers.delete(key);
       }
+    }, delay);
 
-      const id = window.setTimeout(async () => {
-        try {
-          await persist();
-        } catch (err) {
-          logError('syncEngine', `persist failed for key "${key}"`, err);
-        } finally {
-          timers.delete(key);
-        }
-      }, delay);
+    timers.set(key, id);
+  };
 
-      timers.set(key, id);
+  return {
+    schedule,
+    scheduleHighFreq(key, persist) {
+      schedule(key, persist, HIGH_FREQ_DELAY);
     },
-
+    scheduleLowFreq(key, persist) {
+      schedule(key, persist, LOW_FREQ_DELAY);
+    },
     cancel(key) {
       const existing = timers.get(key);
       if (existing !== undefined) {

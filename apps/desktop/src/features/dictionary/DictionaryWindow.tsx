@@ -206,7 +206,7 @@ export function DictionaryWindow() {
   );
 }
 
-/** 查词结果展示；导出供移动端 DictionaryOverlay 复用 */
+/** 查词结果展示组件 */
 export function DictResult({ entry }: { entry: DictEntry }) {
   if (!entry.found) {
     return (

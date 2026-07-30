@@ -5,6 +5,9 @@
     "dev:desktop": "pnpm --filter desktop run dev",
     "tauri:dev": "pnpm --filter desktop run tauri:dev",
     "tauri:build": "pnpm --filter desktop run tauri:build",
-    "dev:mobile": "pnpm --filter mobile start"
+    "dev:mobile": "pnpm --filter mobile start",
+    "mobile:dev": "pnpm --filter mobile run dev",
+    "mobile:build": "pnpm --filter mobile run build",
+    "build:mobile": "pnpm --filter mobile run build"
   }
 }

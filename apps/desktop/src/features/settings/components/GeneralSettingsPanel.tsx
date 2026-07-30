@@ -3,7 +3,6 @@ import { Power, Info } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { logWarn } from '@humanmanual/core';
 import { usePreferencesStore } from '../preferencesStore';
-import { isMobilePlatform } from '../../../lib/platform';
 
 export function GeneralSettingsPanel() {
   const [autostartEnabled, setAutostartEnabled] = useState(false);
@@ -43,18 +42,6 @@ export function GeneralSettingsPanel() {
       setLoading(false);
     }
   };
-
-  // 移动端无开机自启概念，隐藏整张卡片（放在 hooks 之后以满足 hooks 规则）
-  if (isMobilePlatform()) {
-    return (
-      <div className="settings-panel space-y-6 p-4">
-        <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-lg text-xs text-gray-500">
-          <Info size={16} className="text-gray-400 shrink-0 mt-0.5" />
-          <span>移动端暂无可配置的通用设置。</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="settings-panel space-y-6 p-4">

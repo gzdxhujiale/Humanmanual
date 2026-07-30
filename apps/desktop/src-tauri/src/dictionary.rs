@@ -63,13 +63,18 @@ pub async fn dict_lookup(word: String, db: State<'_, TursoDb>) -> AppResult<Dict
     // 1. Check local SQLite dict_cache table first
     let conn = db.conn()?;
     let mut cache_rows = conn.query(
-        "SELECT word, phonetic, definition, translation, pos, tag, exchange, collins, oxford FROM dict_cache WHERE word = ?1 LIMIT 1",
+        "SELECT word, phonetic, definition, translation, pos, tag, exchange, collins, oxford, examples_json, phrases_json FROM dict_cache WHERE word = ?1 LIMIT 1",
         libsql::params![query.clone()],
     ).await;
     if let Ok(ref mut rows) = cache_rows {
         if let Ok(Some(row)) = rows.next().await {
             let word_val: String = row.get(0).unwrap_or_default();
             let audio_base = format!("https://dict.youdao.com/dictvoice?audio={}", urlencoding_simple(&word_val));
+            let ex_str: String = row.get(9).unwrap_or_else(|_| "[]".to_string());
+            let phr_str: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
+            let examples: Vec<DictExample> = serde_json::from_str(&ex_str).unwrap_or_default();
+            let phrases: Vec<DictPhrase> = serde_json::from_str(&phr_str).unwrap_or_default();
+
             return Ok(DictEntry {
                 word: word_val,
                 phonetic: row.get(1).unwrap_or_default(),
@@ -83,6 +88,8 @@ pub async fn dict_lookup(word: String, db: State<'_, TursoDb>) -> AppResult<Dict
                 collins: row.get(7).unwrap_or(0),
                 oxford: row.get(8).unwrap_or(0),
                 found: true,
+                examples,
+                phrases,
                 ..Default::default()
             });
         }
@@ -92,9 +99,12 @@ pub async fn dict_lookup(word: String, db: State<'_, TursoDb>) -> AppResult<Dict
     match fetch_youdao_online(&query).await {
         Ok(entry) if entry.found => {
             let now = crate::sync::now_iso();
+            let examples_json = serde_json::to_string(&entry.examples).unwrap_or_else(|_| "[]".to_string());
+            let phrases_json = serde_json::to_string(&entry.phrases).unwrap_or_else(|_| "[]".to_string());
+
             let _ = conn.execute(
-                "INSERT INTO dict_cache (word, phonetic, definition, translation, pos, tag, exchange, collins, oxford, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, translation = excluded.translation, pos = excluded.pos",
-                libsql::params![entry.word.clone(), entry.phonetic.clone(), entry.definition.clone(), entry.translation.clone(), entry.pos.clone(), entry.tag.clone(), entry.exchange.clone(), entry.collins, entry.oxford, now],
+                "INSERT INTO dict_cache (word, phonetic, definition, translation, pos, tag, exchange, collins, oxford, examples_json, phrases_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, translation = excluded.translation, pos = excluded.pos, examples_json = excluded.examples_json, phrases_json = excluded.phrases_json",
+                libsql::params![entry.word.clone(), entry.phonetic.clone(), entry.definition.clone(), entry.translation.clone(), entry.pos.clone(), entry.tag.clone(), entry.exchange.clone(), entry.collins, entry.oxford, examples_json, phrases_json, now],
             ).await;
 
             Ok(entry)

@@ -113,12 +113,7 @@ const StandaloneNoteWindow = React.lazy(() => import("./features/lists/Standalon
 const DictionaryWindow = React.lazy(() => import("./features/dictionary/DictionaryWindow").then(m => ({ default: m.DictionaryWindow })));
 const TaskQuickEditWindow = React.lazy(() => import("./features/time-management/TaskQuickEditWindow").then(m => ({ default: m.TaskQuickEditWindow })));
 
-// 移动端专属宿主：子窗口能力缺失时在主窗口 DOM 内渲染同样的浮层
-const QuickEditOverlayHost = React.lazy(() => import("./features/time-management/QuickEditOverlayHost").then(m => ({ default: m.QuickEditOverlayHost })));
-const DictionaryOverlay = React.lazy(() => import("./features/dictionary/DictionaryOverlay").then(m => ({ default: m.DictionaryOverlay })));
-
 import { useDictionaryHotkey } from "./features/dictionary/useDictionaryHotkey";
-import { isMobilePlatform } from "./lib/platform";
 
 function App() {
   const params = new URLSearchParams(window.location.search);
@@ -152,21 +147,13 @@ function App() {
       import("./features/settings/updateStore").then(({ useUpdateStore }) => {
         useUpdateStore.getState().initBackgroundUpdate();
       });
-      // 任务提醒调度器：桌面端已下沉移交至 Rust 后端 (reminder_scheduler.rs) 线程守护；
-      // 移动端后台 JS 会被冻结，保持移动端系统级 scheduled notification (AlarmManager 到点投递)
-      if (isMobilePlatform()) {
-        import("./features/time-management/mobileReminderScheduler").then(({ startMobileReminderScheduler }) => {
-          startMobileReminderScheduler();
+      // 任务提醒调度器：桌面端由 Rust 后端 (reminder_scheduler.rs) 线程守护；
+      // 空闲预热任务快捷编辑子窗口（窗口池），首次打开即秒显
+      requestIdleCallback(() => {
+        void import("./features/time-management/quickEditWindow").then(({ prewarmQuickEditWindow }) => {
+          prewarmQuickEditWindow();
         });
-      }
-      // 空闲预热任务快捷编辑子窗口（窗口池），首次打开即秒显；移动端无窗口池，跳过
-      if (!isMobilePlatform()) {
-        requestIdleCallback(() => {
-          void import("./features/time-management/quickEditWindow").then(({ prewarmQuickEditWindow }) => {
-            prewarmQuickEditWindow();
-          });
-        }, { timeout: 3000 });
-      }
+      }, { timeout: 3000 });
     }
   }, [isNoteWindow, isQuickEditWindow]);
 
@@ -290,14 +277,6 @@ function App() {
       {isSettingsOpen ? (
         <React.Suspense fallback={null}>
           <SettingsModal onClose={() => setIsSettingsOpen(false)} />
-        </React.Suspense>
-      ) : null}
-
-      {/* 移动端：快捷编辑浮层与词典浮层直接挂在主窗口 DOM */}
-      {isMobilePlatform() ? (
-        <React.Suspense fallback={null}>
-          <QuickEditOverlayHost />
-          <DictionaryOverlay />
         </React.Suspense>
       ) : null}
     </>

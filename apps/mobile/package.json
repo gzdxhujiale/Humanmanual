@@ -6,6 +6,7 @@
     "@expo/ui": "~57.0.8",
     "@humanmanual/core": "workspace:^",
     "@libsql/client": "^0.17.4",
+    "dayjs": "^1.11.13",
     "expo": "~57.0.9",
     "expo-constants": "~57.0.8",
     "expo-device": "~57.0.1",
@@ -37,6 +38,8 @@
   },
   "scripts": {
     "start": "expo start",
+    "dev": "expo start",
+    "build": "expo export",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",

@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tauri::Manager;
 
 use crate::error::AppResult;
 
@@ -35,22 +36,30 @@ pub fn set_app_config_dir(dir: PathBuf) {
     let _ = APP_CONFIG_DIR.set(dir);
 }
 
-/// 自动在 Android / 移动端初始化 TLS CA 根证书环境
+/// 初始化 TLS CA 根证书环境
 pub fn init_tls_ca_certificates(_config_dir: &std::path::Path) {
-    openssl_probe::init_ssl_cert_env_vars();
-    if std::path::Path::new("/system/etc/security/cacerts").exists() {
-        std::env::set_var("SSL_CERT_DIR", "/system/etc/security/cacerts");
+    unsafe {
+        openssl_probe::init_openssl_env_vars();
     }
 }
 
 /// Get the local database file path.
-/// 桌面（Windows）沿用 APPDATA\AIstudy\data 老路径，保证存量用户数据不迁移；
-/// 移动端（Android/iOS）没有 APPDATA，统一落在 Tauri app_data_dir 下。
+/// 桌面端（Windows）优先检查存量 APPDATA\AIstudy\data 老路径，保证旧用户数据不迁移；
+/// 跨平台桌面环境默认使用 app_data_dir 下数据路径。
 fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
     let _ = app;
-    let app_data = std::env::var("APPDATA")
-        .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string());
-    let dir = PathBuf::from(app_data).join("AIstudy").join("data");
+    // 优先检查存量 Windows APPDATA 老路径
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let legacy_db = PathBuf::from(app_data).join("AIstudy").join("data").join("fishworker.db");
+        if legacy_db.exists() {
+            return legacy_db;
+        }
+    }
+    // 跨平台标准路径：Tauri app_data_dir / data / fishworker.db
+    let base_dir = APP_CONFIG_DIR.get().cloned().unwrap_or_else(|| {
+        app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+    let dir = base_dir.join("data");
     if !dir.exists() {
         let _ = std::fs::create_dir_all(&dir);
     }
@@ -136,9 +145,14 @@ pub struct TursoConfigJson {
     pub sync_on_start: Option<bool>,
 }
 
-#[cfg(desktop)]
 fn get_app_data_path() -> PathBuf {
-    PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string()))
+    if let Some(dir) = APP_CONFIG_DIR.get() {
+        return dir.clone();
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        return PathBuf::from(appdata).join("AIstudy");
+    }
+    PathBuf::from(".")
 }
 
 pub fn read_turso_config() -> TursoConfigJson {
@@ -160,9 +174,7 @@ pub fn read_turso_config() -> TursoConfigJson {
             .ok()
             .and_then(|p| p.parent().map(|p| p.join("turso.config.json")))
             .unwrap_or_default(),
-        get_app_data_path()
-            .join("AIstudy")
-            .join("turso.config.json"),
+        get_app_data_path().join("turso.config.json"),
     ]);
 
     for path in paths {
@@ -177,7 +189,7 @@ pub fn read_turso_config() -> TursoConfigJson {
         }
     }
 
-    // Default embedded config fallback (ensures mobile gets default Turso config out of the box)
+    // Default embedded config fallback
     if let Ok(config) = serde_json::from_str::<TursoConfigJson>(DEFAULT_TURSO_CONFIG) {
         if let Some(dir) = APP_CONFIG_DIR.get() {
             let target_path = dir.join("turso.config.json");
@@ -199,15 +211,14 @@ pub async fn db_get_turso_config() -> AppResult<TursoConfigJson> {
 
 #[tauri::command]
 pub async fn db_save_turso_config(config: TursoConfigJson) -> AppResult<()> {
-    let mut path = get_app_data_path();
-    path.push("AIstudy");
-    if !path.exists() {
-        let _ = fs::create_dir_all(&path);
+    let base_dir = get_app_data_path();
+    if !base_dir.exists() {
+        let _ = fs::create_dir_all(&base_dir);
     }
-    path.push("turso.config.json");
+    let target_path = base_dir.join("turso.config.json");
 
     let content = serde_json::to_string_pretty(&config)?;
-    fs::write(path, content)?;
+    fs::write(target_path, content)?;
     Ok(())
 }
 
