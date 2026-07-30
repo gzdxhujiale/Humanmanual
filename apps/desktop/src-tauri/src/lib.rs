@@ -15,13 +15,8 @@ mod time_management;
 use db::TursoDb;
 use tauri::Manager;
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
-
-    // 桌面专属插件：移动端无多实例/窗口状态/更新器/进程重启/开机自启概念，编译期排除
-    #[cfg(desktop)]
-    let builder = builder
+    tauri::Builder::default()
         // single-instance 必须第一个注册：重复启动时聚焦已有主窗口，避免两套实例写同一个 SQLite
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -41,9 +36,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::AppleScript,
             None,
-        ));
-
-    builder
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
@@ -55,15 +48,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // 平台无关的应用数据目录
             if let Ok(dir) = app.path().app_data_dir() {
                 db::set_app_config_dir(dir);
             }
 
-            // Establish libsql Database connection (embedded replica or local).
-            // libsql's embedded replica init involves deep async call chains that can
-            // overflow Windows' default 1 MB main-thread stack → run in a dedicated
-            // thread with a 32 MB stack and block until it finishes.
             let handle = app.handle().clone();
             let handle_clone = handle.clone();
             let turso_db = std::thread::Builder::new()
@@ -91,7 +79,6 @@ pub fn run() {
                             }
                         };
 
-                        // Run schema DDL and migrations using a fresh connection
                         if let Ok(conn) = db.connect() {
                             if let Err(e) = schema::ensure_local_tables(&conn).await {
                                 eprintln!("[DB] Error ensuring local tables: {}", e);
@@ -110,15 +97,12 @@ pub fn run() {
                     panic!("DB setup thread panicked");
                 });
 
-            // Initial pull from Turso cloud — only for embedded replica mode.
-            // Calling sync() on a File-mode DB panics/errors with "Sync is not supported".
             if turso_db.is_remote {
                 let db_sync = turso_db.db.clone();
                 let sync_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     match db_sync.sync().await {
                         Ok(_) => {
-                            println!("[DB] Initial sync from Turso cloud completed.");
                             use tauri::Emitter;
                             let _ = sync_handle.emit("db:synced", ());
                         }
@@ -130,8 +114,6 @@ pub fn run() {
             }
 
             app.manage(turso_db);
-
-            // Start native Rust task reminder scheduler background loop
             let turso_state = app.state::<TursoDb>();
             let db_for_reminder = turso_state.inner().clone();
             reminder_scheduler::start_reminder_scheduler(app.handle().clone(), db_for_reminder);
@@ -171,7 +153,6 @@ pub fn run() {
             list::commands::list_delete_group,
             list::commands::list_upsert_template,
             list::commands::list_delete_template,
-            list::migration::list_migrate_from_local,
             mission::mission_load_all,
             mission::mission_save_statement,
             mission::mission_create_role,

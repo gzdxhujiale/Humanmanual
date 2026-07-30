@@ -1,5 +1,5 @@
 import { call, callSilent } from '../../lib/tauriClient';
-import type { List, Folder, Note, NoteGroup, ListsData } from './listsTypes';
+import type { List, Folder, Note, NoteGroup } from './listsTypes';
 
 /**
  * listsService — the data-access seam for the Lists feature.
@@ -39,10 +39,6 @@ export type ListLoadAllPayload = {
   }>;
   templates: Array<{ id: string; name: string; content: string }>;
 };
-
-export function migrateFromLocal(data: ListsData): Promise<void> {
-  return call('list_migrate_from_local', { data });
-}
 
 export function loadAll(): Promise<ListLoadAllPayload> {
   return call<ListLoadAllPayload>('list_load_all');

@@ -296,8 +296,22 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_habit_checkins_habit ON habit_checkins(habit_id)",
 ];
 
+pub const LATEST_SCHEMA_VERSION: i32 = 26;
+
 /// Create all tables in the local SQLite database and run versioned migrations.
 pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error> {
+    // Check if schema_migrations table exists and latest migration is already applied.
+    // If up-to-date, bypass executing 30+ sequential DDL RPC calls over the network!
+    if let Ok(mut check_rows) = conn.query("SELECT MAX(version) FROM schema_migrations", ()).await {
+        if let Ok(Some(row)) = check_rows.next().await {
+            if let Ok(current_ver) = row.get::<i32>(0) {
+                if current_ver >= LATEST_SCHEMA_VERSION {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     // PRAGMA journal_mode=WAL returns a result row → must use query(), not execute().
     // embedded replica already uses WAL internally; this is just a defensive set.
     let _ = conn.query("PRAGMA journal_mode=WAL", ()).await;

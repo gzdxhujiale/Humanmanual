@@ -47,21 +47,10 @@ pub fn init_tls_ca_certificates(_config_dir: &std::path::Path) {
 /// 桌面（Windows）沿用 APPDATA\AIstudy\data 老路径，保证存量用户数据不迁移；
 /// 移动端（Android/iOS）没有 APPDATA，统一落在 Tauri app_data_dir 下。
 fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
-    #[cfg(desktop)]
-    let dir = {
-        let _ = app;
-        let app_data = std::env::var("APPDATA")
-            .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string());
-        PathBuf::from(app_data).join("AIstudy").join("data")
-    };
-    #[cfg(mobile)]
-    let dir = {
-        use tauri::Manager;
-        app.path()
-            .app_data_dir()
-            .expect("app data dir unavailable")
-            .join("data")
-    };
+    let _ = app;
+    let app_data = std::env::var("APPDATA")
+        .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".to_string());
+    let dir = PathBuf::from(app_data).join("AIstudy").join("data");
     if !dir.exists() {
         let _ = std::fs::create_dir_all(&dir);
     }
@@ -94,7 +83,6 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 return Builder::new_local(db_path_str).build().await.map(|db| (db, false, None));
             }
 
-            // Normalize libsql:// or host to https:// as required by Turso remote replica API
             let formatted_url = if url.starts_with("libsql://") {
                 url.replacen("libsql://", "https://", 1)
             } else if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -211,14 +199,8 @@ pub async fn db_get_turso_config() -> AppResult<TursoConfigJson> {
 
 #[tauri::command]
 pub async fn db_save_turso_config(config: TursoConfigJson) -> AppResult<()> {
-    #[cfg(desktop)]
-    let mut path = {
-        let mut p = get_app_data_path();
-        p.push("AIstudy");
-        p
-    };
-    #[cfg(mobile)]
-    let mut path = APP_CONFIG_DIR.get().cloned().unwrap_or_default();
+    let mut path = get_app_data_path();
+    path.push("AIstudy");
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
     }

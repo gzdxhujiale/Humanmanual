@@ -115,23 +115,6 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
 
     const promise = (async () => {
       try {
-        // One-time migration from legacy localStorage for offline upgrade users
-        const MIGRATION_KEY = 'aistudy_sqlite_migrated_v1';
-        if (!localStorage.getItem(MIGRATION_KEY)) {
-          try {
-            const oldLists = localStorage.getItem('aistudy_lists_data');
-            if (oldLists) {
-              const parsed = JSON.parse(oldLists) as ListsData;
-              if (parsed.folders?.length || parsed.lists?.length || parsed.notes?.length) {
-                await listsService.migrateFromLocal(parsed);
-              }
-            }
-            localStorage.setItem(MIGRATION_KEY, 'true');
-          } catch (mErr) {
-            logError('listsStore', 'legacy localStorage migration failed', mErr);
-          }
-        }
-
         const allData = await listsService.loadAll();
 
         // 默认模板只在首次运行时 seed 一次（标记存 app_preferences，随双层持久化同步）；
