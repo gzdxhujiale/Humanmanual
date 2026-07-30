@@ -1,0 +1,13 @@
+{
+  "name": "@humanmanual/core",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "zustand": "^5.0.14",
+    "@libsql/client": "^0.17.4"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3"
+  }
+}
