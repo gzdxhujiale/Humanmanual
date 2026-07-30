@@ -26,13 +26,13 @@ tauri-plugin-os = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # libsql: Turso embedded replica driver (replaces sqlx for runtime queries)
-libsql = { version = "0.9", features = ["replication"] }
+libsql = { version = "0.9", features = ["replication", "remote", "sync", "tls"] }
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], default-features = false }
-
+openssl-probe = "0.1"
 # 桌面专属：窗口状态/单实例/更新器/进程/自启/rfd 对话框在移动端不受支持
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

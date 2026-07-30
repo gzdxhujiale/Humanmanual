@@ -13,6 +13,13 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val keyProperties = Properties().apply {
+    val propFile = file("key.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.administrator.humanmanual"
@@ -25,6 +32,15 @@ android {
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
         ndk {
             abiFilters.add("arm64-v8a")
+        }
+    }
+    signingConfigs {
+        create("release") {
+            val ksPath = keyProperties.getProperty("storeFile", "../../../../release.keystore")
+            storeFile = file(ksPath)
+            storePassword = keyProperties.getProperty("storePassword", "")
+            keyAlias = keyProperties.getProperty("keyAlias", "my-key-alias")
+            keyPassword = keyProperties.getProperty("keyPassword", "")
         }
     }
     buildTypes {
@@ -40,6 +56,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

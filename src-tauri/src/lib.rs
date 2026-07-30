@@ -71,34 +71,77 @@ pub fn run() {
                 .stack_size(32 * 1024 * 1024) // 32 MB
                 .spawn(move || {
                     tauri::async_runtime::block_on(async move {
-                        let db = db::establish_local_connection(&handle_clone)
-                            .await
-                            .expect("Failed to connect to database");
+                        let (db, is_remote, init_err) = match db::establish_local_connection(&handle_clone).await {
+                            Ok(trio) => trio,
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                eprintln!("[DB] Failed to connect to database: {}, attempting fallback remote_replica init", err_str);
+                                let cfg = db::read_turso_config();
+                                let fallback_path = handle_clone
+                                    .path()
+                                    .app_data_dir()
+                                    .unwrap_or_default()
+                                    .join("data")
+                                    .join("fishworker.db");
+                                let path_str = fallback_path.to_string_lossy().to_string();
+
+                                if let (Some(url), Some(token)) = (cfg.url.as_deref(), cfg.auth_token.as_deref()) {
+                                    if !url.is_empty() && !token.is_empty() {
+                                        let fmt_url = if url.starts_with("libsql://") {
+                                            url.replacen("libsql://", "https://", 1)
+                                        } else {
+                                            url.to_string()
+                                        };
+                                        if let Ok(r_db) = libsql::Builder::new_remote_replica(path_str.clone(), fmt_url, token.to_string()).build().await {
+                                            return TursoDb::new(r_db, true, None);
+                                        }
+                                    }
+                                }
+                                let local_db = libsql::Builder::new_local(path_str)
+                                    .build()
+                                    .await
+                                    .unwrap_or_else(|e2| panic!("Fatal: Could not open local SQLite DB: {}", e2));
+                                return TursoDb::new(local_db, false, Some(err_str));
+                            }
+                        };
 
                         // Run schema DDL and migrations using a fresh connection
-                        let conn = db
-                            .connect()
-                            .expect("Failed to get connection for schema setup");
-                        schema::ensure_local_tables(&conn)
-                            .await
-                            .expect("Failed to initialize tables");
+                        if let Ok(conn) = db.connect() {
+                            if let Err(e) = schema::ensure_local_tables(&conn).await {
+                                eprintln!("[DB] Error ensuring local tables: {}", e);
+                            }
+                        } else {
+                            eprintln!("[DB] Failed to get connection for schema setup");
+                        }
 
-                        TursoDb::new(db)
+                        TursoDb::new(db, is_remote, init_err)
                     })
                 })
                 .expect("Failed to spawn db-setup thread")
                 .join()
-                .expect("DB setup thread panicked");
+                .unwrap_or_else(|_| {
+                    eprintln!("[DB] DB setup thread panicked!");
+                    panic!("DB setup thread panicked");
+                });
 
-            // Initial pull from Turso cloud runs in background (non-blocking for instant app launch)
-            let db_sync = turso_db.db.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = db_sync.sync().await {
-                    eprintln!("[DB] Initial sync skipped or failed: {}", e);
-                } else {
-                    println!("[DB] Initial sync from Turso cloud completed.");
-                }
-            });
+            // Initial pull from Turso cloud — only for embedded replica mode.
+            // Calling sync() on a File-mode DB panics/errors with "Sync is not supported".
+            if turso_db.is_remote {
+                let db_sync = turso_db.db.clone();
+                let sync_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match db_sync.sync().await {
+                        Ok(_) => {
+                            println!("[DB] Initial sync from Turso cloud completed.");
+                            use tauri::Emitter;
+                            let _ = sync_handle.emit("db:synced", ());
+                        }
+                        Err(e) => {
+                            eprintln!("[DB] Initial sync skipped or failed: {}", e);
+                        }
+                    }
+                });
+            }
 
             app.manage(turso_db);
 

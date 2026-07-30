@@ -43,8 +43,9 @@ try {
 } catch {}
 
 let args = process.argv.slice(2);
-// Default to arm64 (aarch64) target for real device builds to avoid compiling 4 ABIs
-if ((args[0] === 'build' || args[0] === 'dev') && !args.includes('--target')) {
+// Default to arm64 (aarch64) target for release build to avoid compiling 4 ABIs.
+// For `dev`, let Tauri CLI automatically detect the connected target device.
+if (args[0] === 'build' && !args.includes('--target')) {
   args.push('--target', 'aarch64');
 }
 

@@ -25,6 +25,27 @@ export function DatabaseSettingsPanel() {
     });
   }, []);
 
+  const [syncing, setSyncing] = React.useState(false);
+
+  const handleManualSync = async () => {
+    setSyncing(true);
+    setMessage("");
+    try {
+      const res: string = await call("db_sync_now");
+      if (res.startsWith("sync_ok")) {
+        setMessage("同步成功！已与 Turso 云端完成数据双向同步。");
+      } else if (res.startsWith("sync_error:")) {
+        setMessage("同步失败: " + res.replace("sync_error:", "").trim());
+      } else {
+        setMessage(res);
+      }
+    } catch (err: any) {
+      setMessage("同步过程出错：" + (err?.message || err));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -96,14 +117,23 @@ export function DatabaseSettingsPanel() {
         </article>
 
         {message && (
-          <p className={message.includes("失败") ? "status-message error db-connection-status" : "update-status db-connection-status"}>
+          <p className={message.includes("失败") || message.includes("出错") ? "status-message error db-connection-status" : "update-status db-connection-status"}>
             {message}
           </p>
         )}
 
-        <div className="shortcut-settings-actions">
-          <button className="primary-button" type="submit" disabled={saving}>
+        <div className="shortcut-settings-actions" style={{ display: "flex", gap: "10px" }}>
+          <button className="primary-button" type="submit" disabled={saving || syncing}>
             {saving ? "保存中..." : "保存 Turso 配置"}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={handleManualSync}
+            disabled={saving || syncing}
+            style={{ padding: "8px 16px", borderRadius: "6px", cursor: syncing ? "not-allowed" : "pointer" }}
+          >
+            {syncing ? "同步中..." : "立即与云端同步"}
           </button>
         </div>
       </form>

@@ -316,19 +316,12 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
     let _ = conn.execute("ALTER TABLE pomodoro_records ADD COLUMN deleted_at TEXT NULL", ()).await;
 
     // Read applied migrations
-    let mut applied_rows = conn
-        .query("SELECT version FROM schema_migrations", ())
-        .await
-        .unwrap_or_else(|_| {
-            // If schema_migrations doesn't exist yet, return empty rows by re-creating via a noop
-            // We can't easily return empty here; handle via applied_versions being empty
-            panic!("schema_migrations table should have been created above")
-        });
-
     let mut applied_versions: HashSet<i32> = HashSet::new();
-    while let Ok(Some(row)) = applied_rows.next().await {
-        if let Ok(v) = row.get::<i32>(0) {
-            applied_versions.insert(v);
+    if let Ok(mut applied_rows) = conn.query("SELECT version FROM schema_migrations", ()).await {
+        while let Ok(Some(row)) = applied_rows.next().await {
+            if let Ok(v) = row.get::<i32>(0) {
+                applied_versions.insert(v);
+            }
         }
     }
 
