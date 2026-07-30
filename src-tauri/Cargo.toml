@@ -43,3 +43,6 @@ tauri-plugin-autostart = "2"
 rfd = "0.14"
 
 
+[profile.release]
+codegen-units = 16
+lto = "thin"

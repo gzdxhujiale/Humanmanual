@@ -267,17 +267,7 @@ const SQLITE_DDL_STATEMENTS: &[&str] = &[
         applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     )",
 
-    // ── 18. Outbox Queue Metadata ──
-    "CREATE TABLE IF NOT EXISTS outbox_queue (
-        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-        table_name TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        action TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE (table_name, entity_id, action)
-    )",
-
-    // ── 19. Dictionary Offline Cache ──
+    // ── 18. Dictionary Offline Cache ──
     "CREATE TABLE IF NOT EXISTS dict_cache (
         word TEXT NOT NULL PRIMARY KEY,
         phonetic TEXT NOT NULL DEFAULT '',

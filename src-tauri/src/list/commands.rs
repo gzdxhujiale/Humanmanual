@@ -1,11 +1,11 @@
-﻿// Load + CRUD commands for the lists module.
+// Load + CRUD commands for the lists module.
 
 use tauri::State;
 
 use super::types::*;
 use crate::error::AppResult;
 use crate::sync::{now_iso, now_ms};
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 // ── Load all ──
 

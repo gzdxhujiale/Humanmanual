@@ -1,9 +1,9 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppResult;
 use crate::sync::now_iso;
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinkedTarget {
@@ -71,21 +71,21 @@ pub async fn pomodoro_load_all(db: State<'_, TursoDb>) -> AppResult<PomodoroData
 
     let mut records = Vec::new();
     while let Ok(Some(row)) = records_rows.next().await {
-        let linked_target_str: Option<String> = row.get(10).ok();
-        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
+        let linked_target_str: Option<String> = row.get::<String>(10).ok();
+        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(s.as_str()).ok());
         records.push(PomodoroRecord {
-            id: row.get(0).unwrap_or_default(),
-            mode: row.get(1).unwrap_or_default(),
-            phase: row.get(2).unwrap_or_default(),
-            start_time: row.get(3).unwrap_or_default(),
-            end_time: row.get(4).unwrap_or_default(),
+            id: row.get::<String>(0).unwrap_or_default(),
+            mode: row.get::<String>(1).unwrap_or_default(),
+            phase: row.get::<String>(2).unwrap_or_default(),
+            start_time: row.get::<String>(3).unwrap_or_default(),
+            end_time: row.get::<String>(4).unwrap_or_default(),
             duration_minutes: row.get(5).unwrap_or(0),
-            date: row.get(6).unwrap_or_default(),
-            date_label: row.get(7).unwrap_or_default(),
-            time_range_label: row.get(8).unwrap_or_default(),
-            task_id: row.get(9).ok(),
+            date: row.get::<String>(6).unwrap_or_default(),
+            date_label: row.get::<String>(7).unwrap_or_default(),
+            time_range_label: row.get::<String>(8).unwrap_or_default(),
+            task_id: row.get::<String>(9).ok(),
             linked_target,
-            created_at: row.get(11).unwrap_or_default(),
+            created_at: row.get::<String>(11).unwrap_or_default(),
         });
     }
 
@@ -97,8 +97,8 @@ pub async fn pomodoro_load_all(db: State<'_, TursoDb>) -> AppResult<PomodoroData
 
     let mut favorite_tasks = Vec::new();
     while let Ok(Some(row)) = favs_rows.next().await {
-        let linked_target_str: Option<String> = row.get(6).ok();
-        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
+        let linked_target_str: Option<String> = row.get::<String>(6).ok();
+        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(s.as_str()).ok());
         let is_archived_val: i32 = row.get(7).unwrap_or(0);
         favorite_tasks.push(FavoriteFocusTask {
             id: row.get(0).unwrap_or_default(),

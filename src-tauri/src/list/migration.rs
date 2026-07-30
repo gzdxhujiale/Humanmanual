@@ -1,4 +1,4 @@
-﻿// One-shot migration of legacy localStorage data into SQLite.
+// One-shot migration of legacy localStorage data into SQLite.
 // All inserts are INSERT OR IGNORE so re-running is harmless.
 
 use serde::Deserialize;
@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::error::AppResult;
 use crate::sync::now_iso;
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]

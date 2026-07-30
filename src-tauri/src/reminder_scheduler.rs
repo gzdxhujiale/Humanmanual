@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskReminderConfig {
@@ -108,7 +108,7 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
     let today_str = today.format("%Y-%m-%d").to_string();
     let current_hm = (now_local.hour(), now_local.minute());
 
-    let mut tasks = Vec::new();
+    let mut tasks: Vec<(String, String, Option<i64>, Option<String>, i64, String)> = Vec::new();
     while let Ok(Some(row)) = rows.next().await {
         let id: String = row.get(0).unwrap_or_default();
         let title: String = row.get(1).unwrap_or_default();

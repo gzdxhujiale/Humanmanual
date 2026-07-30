@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 /// A bilingual example sentence pair.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]

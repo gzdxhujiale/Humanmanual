@@ -1,9 +1,9 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppResult;
 use crate::sync::now_iso;
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 // ── DTOs ──
 

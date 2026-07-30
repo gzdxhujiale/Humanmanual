@@ -36,11 +36,26 @@ if (env.ANDROID_HOME && (!env.NDK_HOME || !existsSync(env.NDK_HOME))) {
   if (ndk) env.NDK_HOME = ndk;
 }
 
+// Enable sccache if available
+try {
+  spawnSync('sccache', ['--version'], { stdio: 'ignore' });
+  env.RUSTC_WRAPPER = 'sccache';
+} catch {}
+
+let args = process.argv.slice(2);
+// Default to arm64 (aarch64) target for real device builds to avoid compiling 4 ABIs
+if ((args[0] === 'build' || args[0] === 'dev') && !args.includes('--target')) {
+  args.push('--target', 'aarch64');
+}
+
 console.log(`[tauri-android] JAVA_HOME=${env.JAVA_HOME ?? '(not found)'}`);
 console.log(`[tauri-android] ANDROID_HOME=${env.ANDROID_HOME ?? '(not found)'}`);
 console.log(`[tauri-android] NDK_HOME=${env.NDK_HOME ?? '(not found)'}`);
+if (env.RUSTC_WRAPPER) {
+  console.log(`[tauri-android] RUSTC_WRAPPER=${env.RUSTC_WRAPPER}`);
+}
 
-const result = spawnSync('pnpm', ['exec', 'tauri', 'android', ...process.argv.slice(2)], {
+const result = spawnSync('pnpm', ['exec', 'tauri', 'android', ...args], {
   stdio: 'inherit',
   env,
   shell: true, // pnpm is a .cmd shim on Windows

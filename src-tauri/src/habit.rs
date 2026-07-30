@@ -1,10 +1,10 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
 use crate::error::AppResult;
 use crate::sync::now_iso;
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Habit {

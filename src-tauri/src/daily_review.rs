@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::error::AppResult;
 use crate::sync::{now_iso, now_ms};
-use crate::turso_state::TursoDb;
+use crate::db::TursoDb;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]

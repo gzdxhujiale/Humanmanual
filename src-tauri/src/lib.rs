@@ -5,17 +5,15 @@ mod error;
 mod file_dialog;
 mod habit;
 mod list;
-mod local_db;
 mod mission;
 mod pomodoro;
 mod reminder_scheduler;
 mod schema;
 mod sync;
 mod time_management;
-mod turso_state;
 
+use db::TursoDb;
 use tauri::Manager;
-use turso_state::TursoDb;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,10 +31,17 @@ pub fn run() {
             }
         }))
         // 只记忆主窗口状态；快捷编辑/便签/词典等子窗口位置由前端实时计算，不得被旧状态覆盖
-        .plugin(tauri_plugin_window_state::Builder::default().with_filter(|label| label == "main").build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_filter(|label| label == "main")
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, None));
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::AppleScript,
+            None,
+        ));
 
     builder
         .plugin(tauri_plugin_opener::init())
@@ -66,22 +71,17 @@ pub fn run() {
                 .stack_size(32 * 1024 * 1024) // 32 MB
                 .spawn(move || {
                     tauri::async_runtime::block_on(async move {
-                        let db = local_db::establish_local_connection(&handle_clone)
+                        let db = db::establish_local_connection(&handle_clone)
                             .await
                             .expect("Failed to connect to database");
 
                         // Run schema DDL and migrations using a fresh connection
-                        let conn = db.connect().expect("Failed to get connection for schema setup");
+                        let conn = db
+                            .connect()
+                            .expect("Failed to get connection for schema setup");
                         schema::ensure_local_tables(&conn)
                             .await
                             .expect("Failed to initialize tables");
-
-                        // Initial pull from Turso cloud (no-op if local-only mode)
-                        if let Err(e) = db.sync().await {
-                            eprintln!("[DB] Initial sync skipped or failed: {}", e);
-                        } else {
-                            println!("[DB] Initial sync from Turso cloud completed.");
-                        }
 
                         TursoDb::new(db)
                     })
@@ -89,6 +89,16 @@ pub fn run() {
                 .expect("Failed to spawn db-setup thread")
                 .join()
                 .expect("DB setup thread panicked");
+
+            // Initial pull from Turso cloud runs in background (non-blocking for instant app launch)
+            let db_sync = turso_db.db.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = db_sync.sync().await {
+                    eprintln!("[DB] Initial sync skipped or failed: {}", e);
+                } else {
+                    println!("[DB] Initial sync from Turso cloud completed.");
+                }
+            });
 
             app.manage(turso_db);
 
@@ -159,4 +169,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
