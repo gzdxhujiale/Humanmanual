@@ -113,38 +113,8 @@ fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
     dir.join("fishworker.db")
 }
 
-fn is_valid_sqlite_file(db_path: &PathBuf) -> bool {
-    if !db_path.exists() {
-        return true;
-    }
-    if let Ok(metadata) = fs::metadata(db_path) {
-        if metadata.len() < 100 {
-            return false;
-        }
-    } else {
-        return false;
-    }
-    if let Ok(mut file) = fs::File::open(db_path) {
-        use std::io::Read;
-        let mut header = [0u8; 16];
-        if file.read_exact(&mut header).is_ok() {
-            // Support standard SQLite 3, TursoDB, libSQL, and encrypted header formats.
-            if &header == b"SQLite format 3\0"
-                || header.starts_with(b"Turso")
-                || header.starts_with(b"libsql")
-                || header.starts_with(b"SQLCipher")
-            {
-                return true;
-            }
-            // For encrypted or TursoDB custom header files, non-empty readable files (len >= 100) are valid.
-            return true;
-        }
-    }
-    false
-}
-
 fn reset_replica_files(db_path: &PathBuf) {
-    println!("[DB] Resetting replica db file and sidecar metadata: {:?}", db_path);
+    println!("[DB] Cleaning up replica database files: {:?}", db_path);
     let _ = fs::remove_file(db_path);
     if let Some(parent) = db_path.parent() {
         let _ = fs::remove_file(parent.join("fishworker.db-info"));
@@ -153,40 +123,12 @@ fn reset_replica_files(db_path: &PathBuf) {
     }
 }
 
-fn check_and_reset_replica_if_url_changed(db_path: &PathBuf, current_url: &str) {
-    if let Some(parent) = db_path.parent() {
-        let marker_path = parent.join("last_turso_url.txt");
-        let old_url = fs::read_to_string(&marker_path).unwrap_or_default();
-        let info_path = parent.join("fishworker.db-info");
-        
-        let url_changed = !old_url.is_empty() && old_url.trim() != current_url.trim();
-        let file_corrupted = !is_valid_sqlite_file(db_path);
-        // A plain SQLite file (without db-info sidecar) cannot be opened directly by libSQL as a replica.
-        // Reset plain local SQLite files so libSQL Builder::new_remote_replica can build a proper replica with db-info.
-        let non_replica_file = db_path.exists() && !info_path.exists();
-
-        if url_changed || non_replica_file || file_corrupted {
-            if url_changed {
-                println!("[DB] Turso URL changed from '{}' to '{}'. Resetting replica...", old_url.trim(), current_url.trim());
-            } else if non_replica_file {
-                println!("[DB] Non-replica plain SQLite file detected (db exists but db-info does not). Resetting to initialize embedded replica...");
-            } else if file_corrupted {
-                println!("[DB] Corrupted or invalid SQLite file detected ({:?}). Resetting replica...", db_path);
-            }
-            reset_replica_files(db_path);
-        }
-        let _ = fs::write(marker_path, current_url.trim());
-    }
-}
-
 const DEFAULT_TURSO_CONFIG: &str = include_str!("../turso.config.json");
 
-/// Establish a libsql Database connection.
-/// - If turso.config.json contains a valid URL + token, opens an embedded replica
-///   that automatically syncs with Turso Cloud.
-/// - If embedded replica init fails (e.g. WAL/protocol format mismatch or encrypted header),
-///   falls back to direct remote client mode (Hrana/HTTP) or local SQLite mode.
-/// Returns (Database, is_remote) where is_remote = true means remote replica or direct remote mode.
+/// Establish a libsql Database connection using a clean 3-tier strategy:
+/// Tier 1: Embedded Replica (local fast DB + auto sync with Turso Cloud)
+/// Tier 2: Direct Remote Client (live query over HTTP/Hrana if replica init fails)
+/// Tier 3: Local SQLite Mode (offline fallback guarantee)
 pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Database, bool, bool, Option<String>), libsql::Error> {
     if let Some(parent) = get_local_db_path(app).parent() {
         init_tls_ca_certificates(parent);
@@ -197,17 +139,9 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
     let cfg: TursoConfigJson = read_turso_config();
 
     match (cfg.url.as_deref(), cfg.auth_token.as_deref()) {
-        (Some(raw_url), Some(raw_token)) => {
+        (Some(raw_url), Some(raw_token)) if !raw_url.trim().is_empty() && !raw_token.trim().is_empty() => {
             let url = raw_url.trim();
             let token = raw_token.trim();
-
-            if url.is_empty() || token.is_empty() {
-                println!("[DB] Turso URL or Token is empty — opening local SQLite only.");
-                if !is_valid_sqlite_file(&db_path) {
-                    reset_replica_files(&db_path);
-                }
-                return Builder::new_local(db_path_str).build().await.map(|db| (db, false, false, None));
-            }
 
             let formatted_url = if url.starts_with("libsql://") {
                 url.replacen("libsql://", "https://", 1)
@@ -219,76 +153,51 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 url.to_string()
             };
 
-            check_and_reset_replica_if_url_changed(&db_path, &formatted_url);
+            // If a plain SQLite file exists without .db-info sidecar, clear it so libSQL can build a proper replica.
+            if db_path.exists() && !db_path.parent().map_or(false, |p| p.join("fishworker.db-info").exists()) {
+                println!("[DB] Converting plain SQLite file to libSQL embedded replica...");
+                reset_replica_files(&db_path);
+            }
 
             println!("[DB] Opening embedded replica → {}", formatted_url);
             let sync_interval_secs = cfg.sync_interval_ms.unwrap_or(60_000) / 1000;
 
-            let replica_fut = Builder::new_remote_replica(db_path_str.clone(), formatted_url.clone(), token.to_string())
+            // Tier 1: Embedded Remote Replica
+            let replica_res = Builder::new_remote_replica(db_path_str.clone(), formatted_url.clone(), token.to_string())
                 .sync_interval(Duration::from_secs(sync_interval_secs.max(10)))
-                .build();
+                .build()
+                .await;
 
-            // Add timeout & protocol fallback:
-            // 1. Try embedded remote replica (WAL frame replication)
-            // 2. If WAL/protocol mismatch or encryption header causes replica error, clean up bad replica file and fallback to direct remote client
-            // 3. Fallback to local SQLite mode if offline
-            match tokio::time::timeout(Duration::from_millis(5000), replica_fut).await {
-                Ok(Ok(db)) => Ok((db, true, true, None)),
-                Ok(Err(e)) => {
-                    let err_str = e.to_string();
-                    eprintln!("[DB] Remote replica init error: {}. Cleaning up replica files if corrupt and fallbacking to direct remote client...", err_str);
+            match replica_res {
+                Ok(db) => Ok((db, true, true, None)),
+                Err(replica_err) => {
+                    let err_str = replica_err.to_string();
+                    eprintln!("[DB] Embedded replica init error: {}. Fallbacking to direct remote mode...", err_str);
                     if err_str.contains("file is not a database") || err_str.contains("corrupt") {
                         reset_replica_files(&db_path);
                     }
+
+                    // Tier 2: Direct Remote Client Mode
                     match Builder::new_remote(formatted_url.clone(), token.to_string()).build().await {
                         Ok(remote_db) => {
-                            println!("[DB] Successfully connected using direct remote Turso client mode.");
+                            println!("[DB] Connected using direct remote Turso client mode.");
                             Ok((remote_db, true, false, Some(format!("DirectRemoteFallback: {}", err_str))))
                         }
                         Err(remote_err) => {
                             eprintln!("[DB] Direct remote client init error: {}. Fallbacking to local SQLite mode.", remote_err);
-                            let local_db = Builder::new_local(db_path_str.clone()).build().await;
-                            match local_db {
-                                Ok(db) => Ok((db, false, false, Some(format!("ReplicaInitError: {}; RemoteErr: {}", err_str, remote_err)))),
-                                Err(e2) => {
-                                    eprintln!("[DB] Local SQLite open error after fallback: {}. Resetting corrupted replica files and retrying.", e2);
-                                    reset_replica_files(&db_path);
-                                    Builder::new_local(db_path_str)
-                                        .build()
-                                        .await
-                                        .map(|db| (db, false, false, Some(format!("ReplicaInitError: {}", err_str))))
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    eprintln!("[DB] Turso Cloud connection timed out (5000ms limit reached). Fallbacking to direct remote client...");
-                    match Builder::new_remote(formatted_url.clone(), token.to_string()).build().await {
-                        Ok(remote_db) => {
-                            println!("[DB] Successfully connected using direct remote Turso client after timeout.");
-                            Ok((remote_db, true, false, Some("TimeoutDirectRemoteFallback".to_string())))
-                        }
-                        Err(_) => {
-                            let local_db = Builder::new_local(db_path_str.clone()).build().await;
-                            match local_db {
-                                Ok(db) => Ok((db, false, false, Some("Connection to Turso Cloud timed out during startup".to_string()))),
-                                Err(_) => {
-                                    reset_replica_files(&db_path);
-                                    Builder::new_local(db_path_str)
-                                        .build()
-                                        .await
-                                        .map(|db| (db, false, false, Some("Connection to Turso Cloud timed out during startup".to_string())))
-                                }
-                            }
+
+                            // Tier 3: Local SQLite Mode Fallback
+                            let local_db = Builder::new_local(db_path_str).build().await?;
+                            Ok((local_db, false, false, Some(format!("ReplicaErr: {}; RemoteErr: {}", err_str, remote_err))))
                         }
                     }
                 }
             }
         }
         _ => {
-            println!("[DB] No Turso config found — opening local SQLite only.");
-            Builder::new_local(db_path_str).build().await.map(|db| (db, false, false, None))
+            println!("[DB] No valid Turso config found — opening local SQLite only.");
+            let local_db = Builder::new_local(db_path_str).build().await?;
+            Ok((local_db, false, false, None))
         }
     }
 }
@@ -315,39 +224,19 @@ fn get_app_data_path() -> PathBuf {
 }
 
 pub fn read_turso_config() -> TursoConfigJson {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = APP_CONFIG_DIR.get() {
-        paths.push(dir.join("turso.config.json"));
-    }
-    #[cfg(desktop)]
-    paths.extend(vec![
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("turso.config.json"),
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("src-tauri")
-            .join("turso.config.json"),
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("turso.config.json"),
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join("turso.config.json")))
-            .unwrap_or_default(),
+    // Standard Config Resolution:
+    // 1. App Data directory (production)
+    // 2. Cargo Manifest directory (development)
+    let candidate_paths = vec![
         get_app_data_path().join("turso.config.json"),
-    ]);
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("turso.config.json"),
+    ];
 
-    for path in paths {
+    for path in candidate_paths {
         if path.exists() {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(config) = serde_json::from_str::<TursoConfigJson>(&content) {
-                    if config.url.as_deref().map_or(false, |u| !u.is_empty()) {
-                        if config.url.as_deref().map_or(false, |u| u.contains("humanmanual-gzdxhujiale")) {
-                            println!("[DB] Found obsolete humanmanual URL in turso.config.json. Migrating to human URL...");
-                            if let Ok(default_cfg) = serde_json::from_str::<TursoConfigJson>(DEFAULT_TURSO_CONFIG) {
-                                let _ = fs::write(&path, DEFAULT_TURSO_CONFIG);
-                                return default_cfg;
-                            }
-                        }
+                    if config.url.as_deref().map_or(false, |u| !u.trim().is_empty()) {
                         return config;
                     }
                 }
@@ -357,13 +246,6 @@ pub fn read_turso_config() -> TursoConfigJson {
 
     // Default embedded config fallback
     if let Ok(config) = serde_json::from_str::<TursoConfigJson>(DEFAULT_TURSO_CONFIG) {
-        if let Some(dir) = APP_CONFIG_DIR.get() {
-            let target_path = dir.join("turso.config.json");
-            if !target_path.exists() {
-                let _ = fs::create_dir_all(dir);
-                let _ = fs::write(&target_path, DEFAULT_TURSO_CONFIG);
-            }
-        }
         return config;
     }
 
