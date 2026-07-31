@@ -9,7 +9,7 @@ interface WeeklyPlanningProps {
   onScheduleTask: (taskId: string, date: string | undefined, timeOfDay?: 'morning' | 'afternoon') => void;
   hideCompleted: boolean;
   onDeleteTask: (taskId: string) => void;
-  onEditTask: (task: Task) => void;
+  onEditTask: (task: Task, anchor: HTMLElement) => void;
 }
 
 const DAYS_OF_WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -105,7 +105,7 @@ export const WeeklyPlanning: React.FC<WeeklyPlanningProps> = memo(({
               className={`tm-scheduled-task ${task.completed ? 'completed' : ''}`}
               draggable
               onDragStart={(e) => handleDragStart(e, task.id)}
-              onClick={() => onEditTask(task)}
+              onClick={(e) => onEditTask(task, e.currentTarget)}
               style={taskRole ? { borderLeftColor: taskRole.color } : {}}
             >
               <div className="tm-scheduled-task-content">
@@ -138,7 +138,7 @@ export const WeeklyPlanning: React.FC<WeeklyPlanningProps> = memo(({
       <div className="tm-weekly-board">
         <div className="tm-kanban-grid">
           {weekDates.map((dayInfo) => {
-            let dayTasks = tasks.filter((t) => t.scheduledDate === dayInfo.dateStr);
+            let dayTasks = tasks.filter((t) => t.scheduledDate === dayInfo.dateStr && t.quadrant === 'Q2');
             if (hideCompleted) {
               dayTasks = dayTasks.filter((t) => !t.completed);
             }

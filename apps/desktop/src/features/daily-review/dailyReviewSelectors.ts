@@ -24,8 +24,22 @@ export function isReviewEmpty(content: string): boolean {
     }
     return false;
   } catch {
-    return false;
+    const stripped = trimmed.replace(/<[^>]*>/g, '').trim();
+    return stripped.length === 0;
   }
+}
+
+export function normalizeDateStr(d: string): string {
+  if (!d) return '';
+  const trimmed = d.trim();
+  if (trimmed.length >= 10 && trimmed[4] === '-' && trimmed[7] === '-') {
+    return trimmed.slice(0, 10);
+  }
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    return formatDateYMD(parsed);
+  }
+  return trimmed;
 }
 
 /** Non-empty reviews sorted newest-first. */
@@ -36,7 +50,11 @@ export function getAllReviews(reviews: DailyReview[]): DailyReview[] {
 }
 
 export function getReviewByDate(reviews: DailyReview[], date: string): DailyReview | undefined {
-  return reviews.find(r => r.date === date);
+  const target = normalizeDateStr(date);
+  const matches = reviews.filter(r => normalizeDateStr(r.date) === target || r.date.startsWith(target));
+  if (matches.length === 0) return undefined;
+  matches.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return matches[0];
 }
 
 export function getCompoundStats(reviews: DailyReview[]): CompoundStats {

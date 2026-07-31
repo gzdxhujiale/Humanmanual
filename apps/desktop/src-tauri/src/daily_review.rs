@@ -19,6 +19,11 @@ pub struct DailyReviewRow {
 #[tauri::command]
 pub async fn daily_review_load_all(db: State<'_, TursoDb>) -> AppResult<Vec<DailyReviewRow>> {
     let conn = db.conn()?;
+    let _ = conn.execute(
+        "UPDATE daily_reviews SET deleted_at = NULL WHERE deleted_at IS NOT NULL AND length(trim(content)) > 0 AND content != '{}'",
+        (),
+    ).await;
+
     let mut rows = conn
         .query(
             "SELECT id, date, content, rating, created_at, updated_at FROM daily_reviews WHERE deleted_at IS NULL",
@@ -26,32 +31,63 @@ pub async fn daily_review_load_all(db: State<'_, TursoDb>) -> AppResult<Vec<Dail
         )
         .await?;
 
-    let parse_ms = |val: Option<String>| -> Option<i64> {
-        let s = val?;
-        if let Ok(ms) = s.parse::<i64>() {
-            Some(ms)
-        } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-            Some(dt.timestamp_millis())
-        } else if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
-            Some(naive.and_utc().timestamp_millis())
-        } else if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
-            Some(naive.and_utc().timestamp_millis())
-        } else {
-            None
+    let parse_row_ms = |row: &libsql::Row, idx: i32| -> Option<i64> {
+        if let Ok(ms) = row.get::<i64>(idx) {
+            return Some(ms);
         }
+        if let Ok(f) = row.get::<f64>(idx) {
+            return Some(f as i64);
+        }
+        if let Ok(s) = row.get::<String>(idx) {
+            if let Ok(ms) = s.parse::<i64>() {
+                return Some(ms);
+            }
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                return Some(dt.timestamp_millis());
+            }
+            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
+                return Some(naive.and_utc().timestamp_millis());
+            }
+            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                return Some(naive.and_utc().timestamp_millis());
+            }
+        }
+        None
     };
 
     let mut result = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let created_at_str: Option<String> = row.get(4).ok();
-        let updated_at_str: Option<String> = row.get(5).ok();
+    while let Ok(item) = rows.next().await {
+        let row = match item {
+            Some(r) => r,
+            None => break,
+        };
+
+        let id: String = row.get(0).unwrap_or_default();
+        let raw_date: String = row.get(1).unwrap_or_default();
+        let date = if raw_date.len() >= 10 {
+            let b = raw_date.trim().as_bytes();
+            if b.len() >= 10 && b[4] == b'-' && b[7] == b'-' {
+                raw_date.trim()[..10].to_string()
+            } else if b.len() >= 10 && b[4] == b'/' && b[7] == b'/' {
+                format!("{}-{}-{}", &raw_date[0..4], &raw_date[5..7], &raw_date[8..10])
+            } else {
+                raw_date
+            }
+        } else {
+            raw_date
+        };
+        let content: String = row.get(2).unwrap_or_default();
+        let rating: Option<i32> = row.get(3).ok();
+        let created_at = parse_row_ms(&row, 4);
+        let updated_at = parse_row_ms(&row, 5);
+
         result.push(DailyReviewRow {
-            id: row.get(0).unwrap_or_default(),
-            date: row.get(1).unwrap_or_default(),
-            content: row.get(2).unwrap_or_default(),
-            rating: row.get(3).ok(),
-            created_at: parse_ms(created_at_str),
-            updated_at: parse_ms(updated_at_str),
+            id,
+            date,
+            content,
+            rating,
+            created_at,
+            updated_at,
         });
     }
 

@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Plus, GripVertical, User, X, MoreHorizontal,
   ChevronDown, ChevronRight, Calendar as CalendarIcon, Clock,
-  Type, AlignLeft, CheckCircle2, Circle
+  AlignLeft, CheckCircle2, Circle
 } from 'lucide-react';
 import { DayPicker } from 'react-day-picker';
 import dayjs from 'dayjs';
@@ -13,9 +12,25 @@ import { QuadrantType, Task, Role } from './timeManagementTypes';
 import { WeeklyPlanning } from './WeeklyPlanning';
 import { usePreferencesStore } from '../settings/preferencesStore';
 import { todayYMD } from '../../lib/dateUtils';
-import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import { openQuickEditWindow, requestQuickEditCloseLayer } from './quickEditWindow';
 import './timeManagement.css';
+
+const checkJsonEmpty = (val?: string): boolean => {
+  if (!val) return true;
+  const trimmed = val.trim();
+  if (!trimmed || trimmed === '{}') return true;
+  try {
+    const json = JSON.parse(trimmed);
+    if (!json.content || !Array.isArray(json.content) || json.content.length === 0) return true;
+    if (json.content.length === 1) {
+      const p = json.content[0];
+      if (p.type === 'paragraph' && (!p.content || p.content.length === 0)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
 
 // Stable empty-array references so query-cache misses don't create new arrays each render
 const EMPTY_TASKS: Task[] = [];
@@ -233,230 +248,7 @@ export const DateTimePicker: React.FC<DateTimePickerProps> = memo(({ value, onCh
 });
 
 // ==========================================
-// 4. TaskDetailModal Component
-// ==========================================
-interface TaskDetailModalProps {
-  task: Task;
-  onClose: () => void;
-  onSave: (taskId: string, updates: Partial<Task>, isHighFreq?: boolean) => void;
-}
-
-const checkJsonEmpty = (val?: string): boolean => {
-  if (!val) return true;
-  const trimmed = val.trim();
-  if (!trimmed || trimmed === '{}') return true;
-  try {
-    const json = JSON.parse(trimmed);
-    if (!json.content || !Array.isArray(json.content) || json.content.length === 0) return true;
-    if (json.content.length === 1) {
-      const p = json.content[0];
-      if (p.type === 'paragraph' && (!p.content || p.content.length === 0)) return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
-};
-
-export const TaskDetailModal: React.FC<TaskDetailModalProps> = memo(({ task, onClose, onSave }) => {
-  const [title, setTitle] = useState(task.title);
-  const [deadline, setDeadline] = useState<number | undefined>(task.deadline);
-
-  const latestTitle = useRef(title);
-  const latestDeadline = useRef(deadline);
-  const latestDescription = useRef(task.description || '');
-
-  useEffect(() => {
-    setTitle(task.title);
-    setDeadline(task.deadline);
-    latestTitle.current = task.title;
-    latestDeadline.current = task.deadline;
-    latestDescription.current = task.description || '';
-  }, [task.id, task.title, task.deadline, task.description]);
-
-  useEffect(() => {
-    latestTitle.current = title;
-  }, [title]);
-
-  useEffect(() => {
-    latestDeadline.current = deadline;
-  }, [deadline]);
-
-  const handleDescriptionChange = (jsonStr: string) => {
-    latestDescription.current = jsonStr;
-    triggerAutoSave({ description: jsonStr }, true);
-  };
-
-  const timers = useRef<Record<string, number>>({});
-
-  const triggerAutoSave = (updates: Partial<Task>, isHighFreq = true) => {
-    const key = Object.keys(updates)[0];
-    if (timers.current[key]) {
-      window.clearTimeout(timers.current[key]);
-    }
-
-    timers.current[key] = window.setTimeout(() => {
-      onSave(task.id, updates, isHighFreq);
-      delete timers.current[key];
-    }, 500);
-  };
-
-  const flushSaves = () => {
-    Object.keys(timers.current).forEach(key => {
-      window.clearTimeout(timers.current[key]);
-    });
-    timers.current = {};
-
-    const updates: Partial<Task> = {};
-    if (latestTitle.current.trim() && latestTitle.current !== task.title) {
-      updates.title = latestTitle.current.trim();
-    }
-    if (latestDeadline.current !== task.deadline) {
-      updates.deadline = latestDeadline.current;
-    }
-    const isDescEmpty = checkJsonEmpty(latestDescription.current);
-    const finalDesc = isDescEmpty ? '' : latestDescription.current;
-    const originalDesc = task.description || '';
-    if (finalDesc !== originalDesc) {
-      updates.description = finalDesc || undefined;
-    }
-
-    if (Object.keys(updates).length > 0) {
-      onSave(task.id, updates, false);
-    }
-  };
-
-  const handleClose = () => {
-    flushSaves();
-    onClose();
-  };
-
-  const handleTitleChange = (newTitle: string) => {
-    setTitle(newTitle);
-    triggerAutoSave({ title: newTitle.trim() }, true);
-  };
-
-  const handleClearDeadline = () => {
-    setDeadline(undefined);
-    onSave(task.id, { deadline: undefined, scheduledDate: undefined }, false);
-  };
-
-  const handleDeadlineChange = (newDeadlineStr: string) => {
-    const newDeadline = newDeadlineStr ? dayjs(newDeadlineStr).endOf('day').valueOf() : undefined;
-    setDeadline(newDeadline);
-    onSave(task.id, { deadline: newDeadline, scheduledDate: newDeadlineStr || undefined }, false);
-  };
-
-  return createPortal(
-    <div 
-      className="tm-modal-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          handleClose();
-        }
-      }}
-    >
-      <div className="tm-modal">
-        <div className="tm-modal-header">
-          <h3>任务详情</h3>
-          <button className="icon-button" onClick={handleClose}>
-            <X size={18} />
-          </button>
-        </div>
-        <div className="tm-modal-content">
-          <div className="tm-form-group">
-            <label>
-              <Type size={14} />
-              <span>任务标题</span>
-            </label>
-            <input 
-              type="text" 
-              value={title} 
-              onChange={(e) => handleTitleChange(e.target.value)} 
-              placeholder="输入任务标题..."
-              onBlur={() => {
-                if (title.trim() === '') {
-                  setTitle(task.title);
-                } else {
-                  flushSaves();
-                }
-              }}
-            />
-          </div>
-          <div className="tm-form-group">
-            <label>
-              <CalendarIcon size={14} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                <span>截止时间</span>
-                {deadline ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      handleClearDeadline();
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--primary-color, #165dff)',
-                      cursor: 'pointer',
-                      fontSize: '12px'
-                    }}
-                  >
-                    设为无日期
-                  </button>
-                ) : (
-                  <span style={{ fontSize: '12px', color: 'var(--text-faint, #86909c)' }}>未设置日期</span>
-                )}
-              </div>
-            </label>
-            <input
-              type="date"
-              value={deadline ? dayjs(deadline).format("YYYY-MM-DD") : ""}
-              onChange={(e) => handleDeadlineChange(e.target.value)}
-              onClick={(e) => {
-                try {
-                  (e.currentTarget as HTMLInputElement).showPicker?.();
-                } catch {}
-              }}
-              style={{
-                width: '100%',
-                borderRadius: '8px',
-                minHeight: '40px',
-                padding: '0 12px',
-                border: '1px solid rgba(123, 145, 169, 0.25)',
-                background: 'var(--surface-1)',
-                color: 'inherit',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            />
-          </div>
-          <div className="tm-form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <label>
-              <AlignLeft size={14} />
-              <span>详细内容</span>
-            </label>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '180px', border: '1px solid rgba(123, 145, 169, 0.25)', borderRadius: '8px', overflow: 'hidden', background: 'var(--surface-1)' }}>
-              <ReactjsTiptapEditor
-                key={task.id}
-                initialContent={task.description || ''}
-                onChange={handleDescriptionChange}
-                showToolbar={false}
-                className="task-detail-reactjs-tiptap"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body
-  );
-});
-
-// ==========================================
-// 5. DailyQuadrants Component
+// 4. DailyQuadrants Component
 // ==========================================
 interface DailyQuadrantsProps {
   tasks: Task[];
@@ -900,7 +692,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const setPreference = usePreferencesStore(state => state.setPreference);
   const setHideCompleted = (val: boolean) => setPreference('tm-hide-completed', String(val));
 
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [quickEditOpen, setQuickEditOpen] = useState(false);
   const [draftTasks, setDraftTasks] = useState<Record<string, string>>({});
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1074,7 +865,9 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
 
               <div className="tm-roles-list">
                 {roles.map(role => {
-                  const roleTasks = backlogTasks.filter(t => t.roleId === role.id);
+                  // 本周计划看板只承载「重要不紧急」(Q2) 的待办：周计划围绕 Q2 大石头展开，
+                  // 其余象限（尤其 Q4）不应混入侧栏。
+                  const roleTasks = backlogTasks.filter(t => t.roleId === role.id && t.quadrant === 'Q2');
                   return (
                     <div key={role.id} className="tm-role-card" style={{ borderLeftColor: role.color }}>
                       <div className="tm-role-header">
@@ -1091,7 +884,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
                             className="tm-backlog-task"
                             draggable
                             onDragStart={(e) => handleDragStart(e, task.id)}
-                            onClick={() => setEditingTask(task)}
+                            onClick={(e) => openTaskQuickEdit(task, e.currentTarget)}
                           >
                             <GripVertical size={14} className="drag-handle" />
                             <span className="task-text-truncate">{task.title}</span>
@@ -1131,7 +924,7 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
                   onScheduleTask={handleScheduleTask}
                   hideCompleted={hideCompleted}
                   onDeleteTask={handleDeleteTask}
-                  onEditTask={(task) => setEditingTask(task)}
+                  onEditTask={openTaskQuickEdit}
                 />
               ) : (
                 <DailyQuadrants
@@ -1146,14 +939,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
               )}
             </div>
           </main>
-
-          {editingTask && (
-            <TaskDetailModal
-              task={editingTask}
-              onClose={() => setEditingTask(null)}
-              onSave={handleUpdateTask}
-            />
-          )}
 
           {quickEditOpen && (
             <div

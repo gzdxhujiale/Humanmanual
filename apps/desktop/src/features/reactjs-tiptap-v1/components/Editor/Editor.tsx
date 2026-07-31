@@ -460,23 +460,44 @@ export interface ReactjsTiptapEditorProps {
   collaborationField?: string;
 }
 
+function sanitizeAttrs(node: any): any {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(sanitizeAttrs);
+  const out: any = {};
+  for (const k of Object.keys(node)) {
+    if (k === 'attrs' && node[k] && typeof node[k] === 'object') {
+      const cleanAttrs: any = {};
+      for (const ak of Object.keys(node[k])) {
+        if (node[k][ak] !== null && node[k][ak] !== undefined) {
+          cleanAttrs[ak] = node[k][ak];
+        }
+      }
+      out[k] = cleanAttrs;
+    } else {
+      out[k] = sanitizeAttrs(node[k]);
+    }
+  }
+  return out;
+}
+
 const parseContent = (content?: any) => {
   if (!content) return '';
-  if (typeof content === 'object') return content;
+  if (typeof content === 'object') return sanitizeAttrs(content);
   if (typeof content !== 'string') return String(content);
   const trimmed = content.trim();
 
   // 1. TipTap JSON string
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
-      return JSON.parse(trimmed);
+      const parsed = JSON.parse(trimmed);
+      return sanitizeAttrs(parsed);
     } catch {
       // Fallback if not valid JSON
     }
   }
 
   // 2. HTML string
-  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+  if (/<[a-z][\s\S]*>/i.test(trimmed)) {
     return content;
   }
 

@@ -276,7 +276,7 @@ export const DailyReviewPanel: React.FC = () => {
     const [y, m, d_val] = selectedDate.split('-').map(Number);
     const d = new Date(y, m - 1, d_val);
     d.setDate(d.getDate() + days);
-    
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (d > today) return;
@@ -333,7 +333,7 @@ export const DailyReviewPanel: React.FC = () => {
         {/* Left: Editor */}
         <div className="review-editor-panel">
           <ReviewEditor 
-            key={selectedDate}
+            key={`${selectedDate}-${currentReview?.id || 'new'}`}
             date={selectedDate} 
             review={currentReview} 
             onSave={handleSave}
