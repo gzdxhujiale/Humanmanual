@@ -12,7 +12,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useListsStore } from './listsStore';
 import { List, Folder, ViewType, Note, Template } from './listsTypes';
 import { getNoteOpenMode, setNoteOpenMode, openNoteInNewWindow, NoteOpenMode } from './noteOpenService';
-import { TemplateModal, useTemplateStore } from '../templates';
+import { TemplateModal, useTemplateData, useTemplateActions } from '../templates';
 import * as listsService from './listsService';
 import { logError, logSilent } from '@humanmanual/core';
 import { computeNoteReorder, computeListReorder } from './listsReorder';
@@ -1301,7 +1301,7 @@ export function ListsPanel() {
   const addGroup = useListsStore(s => s.addGroup);
   const updateGroup = useListsStore(s => s.updateGroup);
   const deleteGroup = useListsStore(s => s.deleteGroup);
-  const addTemplate = useListsStore(s => s.addTemplate);
+  const { addTemplate, updateTemplate, deleteTemplate } = useTemplateActions();
 
   const lists = useMemo(() => {
     return [...rawLists].sort((a, b) => {
@@ -1324,9 +1324,7 @@ export function ListsPanel() {
   const noteMap = useMemo(() => new Map(rawNotes.map(n => [n.id, n])), [rawNotes]);
   const listMap = useMemo(() => new Map(lists.map(l => [l.id, l])), [lists]);
 
-  const templates = useTemplateStore(state => state.templates);
-  const updateTemplate = useTemplateStore(state => state.updateTemplate);
-  const deleteTemplate = useTemplateStore(state => state.deleteTemplate);
+  const templates = useTemplateData().data ?? [];
 
   const [activeListId, setActiveListId] = useState<string | null>(() => {
     return localStorage.getItem('lists-active-list-id');

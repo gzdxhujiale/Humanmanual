@@ -1,5 +1,5 @@
 import { call } from "../../lib/tauriClient";
-import type { TimeManagementData } from "./timeManagementStore";
+import type { TimeManagementData } from "./useTimeManagementQuery";
 import type { Task } from "./timeManagementTypes";
 
 /**

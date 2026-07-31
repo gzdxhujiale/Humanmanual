@@ -7,7 +7,18 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { useConfirmDialog } from "../../components/ui/ConfirmDeleteDialog";
 import { useMissionStore } from "./missionStore";
-import type { Goal, GoalStatus, TimeScope } from "./missionTypes";
+import {
+  useMissionData,
+  useSaveStatementMutation,
+  useCreateRoleMutation,
+  useUpdateRoleMutation,
+  useDeleteRoleMutation,
+  useReorderRolesMutation,
+  useCreateGoalMutation,
+  useUpdateGoalMutation,
+  useDeleteGoalMutation,
+} from "./useMissionQuery";
+import type { Goal, GoalStatus, Role, TimeScope } from "./missionTypes";
 import { GOAL_STATUS_LABELS, TIME_SCOPE_LABELS } from "./missionTypes";
 import "./MissionPanel.css";
 
@@ -15,10 +26,11 @@ import "./MissionPanel.css";
 // 1. MissionStatementEditor Component
 // ==========================================
 export const MissionStatementEditor: React.FC = () => {
-  const statement = useMissionStore(s => s.statement);
-  const isCollapsed = useMissionStore(s => s.isStatementCollapsed);
-  const toggle = useMissionStore(s => s.toggleStatementCollapsed);
-  const saveStatement = useMissionStore(s => s.saveStatement);
+  const { data } = useMissionData();
+  const statement = data?.statement ?? null;
+  const isCollapsed = useMissionStore((s) => s.isStatementCollapsed);
+  const toggle = useMissionStore((s) => s.toggleStatementCollapsed);
+  const saveStatementMutation = useSaveStatementMutation();
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -31,10 +43,17 @@ export const MissionStatementEditor: React.FC = () => {
         clearTimeout(saveTimerRef.current);
       }
       saveTimerRef.current = setTimeout(() => {
-        saveStatement(html);
+        saveStatementMutation.mutate(html);
       }, 500);
     },
   });
+
+  // Sync editor content if statement changes from outside query fetch
+  useEffect(() => {
+    if (editor && statement?.content && editor.getHTML() !== statement.content) {
+      editor.commands.setContent(statement.content);
+    }
+  }, [statement?.content, editor]);
 
   useEffect(() => {
     return () => {
@@ -63,15 +82,16 @@ export const MissionStatementEditor: React.FC = () => {
 // 2. RoleSidebar Components
 // ==========================================
 interface SortableRoleItemProps {
-  role: { id: string; name: string; icon: string };
+  role: Role;
   goalCount: number;
+  allRoles: Role[];
 }
 
-const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCount }) => {
-  const selectedRoleId = useMissionStore(s => s.selectedRoleId);
-  const setSelectedRole = useMissionStore(s => s.setSelectedRole);
-  const updateRole = useMissionStore(s => s.updateRole);
-  const deleteRole = useMissionStore(s => s.deleteRole);
+const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCount, allRoles }) => {
+  const selectedRoleId = useMissionStore((s) => s.selectedRoleId);
+  const setSelectedRole = useMissionStore((s) => s.setSelectedRole);
+  const updateRoleMutation = useUpdateRoleMutation();
+  const deleteRoleMutation = useDeleteRoleMutation();
   const { confirm: confirmDelete } = useConfirmDialog();
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: role.id });
 
@@ -96,8 +116,8 @@ const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCoun
   };
 
   const handleConfirmEdit = () => {
-    if (editName.trim()) {
-      updateRole(role.id, { name: editName.trim() });
+    if (editName.trim() && editName !== role.name) {
+      updateRoleMutation.mutate({ id: role.id, name: editName.trim(), icon: role.icon });
     }
     setIsEditing(false);
   };
@@ -110,16 +130,16 @@ const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCoun
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const confirmed = await confirmDelete({
-      title: '删除角色',
+      title: "删除角色",
       description: `确定删除角色「${role.name}」？相关目标也会被删除。`,
-      confirmText: '删除',
+      confirmText: "删除",
     });
     if (confirmed) {
       if (selectedRoleId === role.id) {
-        const remainingRoles = useMissionStore.getState().roles.filter(r => r.id !== role.id);
+        const remainingRoles = allRoles.filter((r) => r.id !== role.id);
         setSelectedRole(remainingRoles.length > 0 ? remainingRoles[0].id : null);
       }
-      deleteRole(role.id);
+      deleteRoleMutation.mutate(role.id);
     }
   };
 
@@ -139,12 +159,12 @@ const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCoun
           className="role-edit-input"
           autoFocus
           value={editName}
-          onChange={e => setEditName(e.target.value)}
-          onKeyDown={e => {
+          onChange={(e) => setEditName(e.target.value)}
+          onKeyDown={(e) => {
             if (e.key === "Enter") handleConfirmEdit();
             if (e.key === "Escape") handleCancelEdit();
           }}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           onBlur={handleConfirmEdit}
         />
       ) : (
@@ -164,16 +184,28 @@ const SortableRoleItem: React.FC<SortableRoleItemProps> = memo(({ role, goalCoun
 });
 
 export const RoleSidebar: React.FC = () => {
-  const roles = useMissionStore(s => s.roles);
-  const goals = useMissionStore(s => s.goals);
-  const addRole = useMissionStore(s => s.addRole);
-  const reorderRoles = useMissionStore(s => s.reorderRoles);
+  const { data } = useMissionData();
+  const roles = data?.roles ?? [];
+  const goals = data?.goals ?? [];
+  const setSelectedRole = useMissionStore((s) => s.setSelectedRole);
+  const selectedRoleId = useMissionStore((s) => s.selectedRoleId);
+
+  const createRoleMutation = useCreateRoleMutation();
+  const reorderRolesMutation = useReorderRolesMutation();
+
   const [newName, setNewName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
+  // Default selection if none selected
+  useEffect(() => {
+    if (!selectedRoleId && roles.length > 0) {
+      setSelectedRole(roles[0].id);
+    }
+  }, [selectedRoleId, roles, setSelectedRole]);
+
   const goalCountMap = useMemo(() => {
     const map: Record<string, number> = {};
-    goals.forEach(g => {
+    goals.forEach((g) => {
       map[g.roleId] = (map[g.roleId] || 0) + 1;
     });
     return map;
@@ -181,7 +213,16 @@ export const RoleSidebar: React.FC = () => {
 
   const handleAdd = () => {
     if (newName.trim()) {
-      addRole(newName.trim(), "🎯");
+      createRoleMutation.mutate(
+        { name: newName.trim(), icon: "🎯", sortOrder: roles.length },
+        {
+          onSuccess: (newRole) => {
+            if (newRole?.id) {
+              setSelectedRole(newRole.id);
+            }
+          },
+        }
+      );
       setNewName("");
       setIsAdding(false);
     }
@@ -190,39 +231,45 @@ export const RoleSidebar: React.FC = () => {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = roles.findIndex(r => r.id === active.id);
-    const newIndex = roles.findIndex(r => r.id === over.id);
-    const newOrder = arrayMove(roles, oldIndex, newIndex).map(r => r.id);
-    reorderRoles(newOrder);
+    const oldIndex = roles.findIndex((r) => r.id === active.id);
+    const newIndex = roles.findIndex((r) => r.id === over.id);
+    const reordered = arrayMove(roles, oldIndex, newIndex);
+    const items: [string, number][] = reordered.map((r, i) => [r.id, i]);
+    reorderRolesMutation.mutate(items);
   };
 
-  const roleIds = useMemo(() => roles.map(r => r.id), [roles]);
+  const roleIds = useMemo(() => roles.map((r) => r.id), [roles]);
 
   return (
     <div className="role-sidebar">
       <div className="role-sidebar-header">
         <span className="role-sidebar-title">角色</span>
-        <button className="role-add-btn" onClick={() => setIsAdding(true)}>+</button>
+        <button className="role-add-btn" onClick={() => setIsAdding(true)}>
+          +
+        </button>
       </div>
       {isAdding && (
         <div className="role-add-input">
           <input
             autoFocus
             value={newName}
-            onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleAdd()}
-            onBlur={() => { if (!newName.trim()) setIsAdding(false); }}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            onBlur={() => {
+              if (!newName.trim()) setIsAdding(false);
+            }}
             placeholder="角色名称"
           />
         </div>
       )}
       <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={roleIds} strategy={verticalListSortingStrategy}>
-          {roles.map(role => (
+          {roles.map((role) => (
             <SortableRoleItem
               key={role.id}
               role={role}
               goalCount={goalCountMap[role.id] || 0}
+              allRoles={roles}
             />
           ))}
         </SortableContext>
@@ -246,8 +293,9 @@ interface GoalCardProps {
 }
 
 export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
-  const updateGoal = useMissionStore(s => s.updateGoal);
-  const deleteGoal = useMissionStore(s => s.deleteGoal);
+  const updateGoalMutation = useUpdateGoalMutation();
+  const deleteGoalMutation = useDeleteGoalMutation();
+
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
 
@@ -255,16 +303,16 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
     const cycle: GoalStatus[] = ["not_started", "in_progress", "completed"];
     const idx = cycle.indexOf(goal.status);
     const next = cycle[(idx + 1) % cycle.length];
-    updateGoal(goal.id, { status: next });
+    updateGoalMutation.mutate({ id: goal.id, updates: { status: next } });
   };
 
   const handleTimeScopeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    updateGoal(goal.id, { timeScope: e.target.value as TimeScope });
+    updateGoalMutation.mutate({ id: goal.id, updates: { timeScope: e.target.value as TimeScope } });
   };
 
   const handleSaveTitle = () => {
     if (editTitle.trim() && editTitle !== goal.title) {
-      updateGoal(goal.id, { title: editTitle.trim() });
+      updateGoalMutation.mutate({ id: goal.id, updates: { title: editTitle.trim() } });
     } else {
       setEditTitle(goal.title);
     }
@@ -278,8 +326,8 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
           <input
             className="goal-edit-input"
             value={editTitle}
-            onChange={e => setEditTitle(e.target.value)}
-            onKeyDown={e => {
+            onChange={(e) => setEditTitle(e.target.value)}
+            onKeyDown={(e) => {
               if (e.key === "Enter") handleSaveTitle();
               if (e.key === "Escape") {
                 setEditTitle(goal.title);
@@ -290,9 +338,9 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
             autoFocus
           />
         ) : (
-          <span 
-            className="goal-title" 
-            onDoubleClick={() => setIsEditing(true)} 
+          <span
+            className="goal-title"
+            onDoubleClick={() => setIsEditing(true)}
             title="双击或点击编辑按钮进行修改"
           >
             {goal.title}
@@ -314,7 +362,9 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
           onChange={handleTimeScopeChange}
         >
           {Object.entries(TIME_SCOPE_LABELS).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
+            <option key={val} value={val}>
+              {label}
+            </option>
           ))}
         </select>
         <div className="goal-card-actions">
@@ -325,9 +375,9 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
           >
             <Pencil size={14} />
           </button>
-          <button 
-            className="goal-action-icon-btn goal-delete-icon-btn" 
-            onClick={() => deleteGoal(goal.id)} 
+          <button
+            className="goal-action-icon-btn goal-delete-icon-btn"
+            onClick={() => deleteGoalMutation.mutate(goal.id)}
             title="删除目标"
           >
             <Trash2 size={14} />
@@ -339,14 +389,19 @@ export const GoalCard: React.FC<GoalCardProps> = memo(({ goal }) => {
 });
 
 export const GoalDetailPanel: React.FC = () => {
-  const selectedRoleId = useMissionStore(s => s.selectedRoleId);
-  const roles = useMissionStore(s => s.roles);
-  const goals = useMissionStore(s => s.goals);
-  const addGoal = useMissionStore(s => s.addGoal);
+  const selectedRoleId = useMissionStore((s) => s.selectedRoleId);
+  const { data } = useMissionData();
+  const roles = data?.roles ?? [];
+  const goals = data?.goals ?? [];
+  const createGoalMutation = useCreateGoalMutation();
+
   const [newTitle, setNewTitle] = useState("");
 
-  const role = useMemo(() => roles.find(r => r.id === selectedRoleId), [roles, selectedRoleId]);
-  const roleGoals = useMemo(() => goals.filter(g => g.roleId === selectedRoleId), [goals, selectedRoleId]);
+  const role = useMemo(() => roles.find((r) => r.id === selectedRoleId), [roles, selectedRoleId]);
+  const roleGoals = useMemo(
+    () => goals.filter((g) => g.roleId === selectedRoleId),
+    [goals, selectedRoleId]
+  );
 
   if (!role) {
     return (
@@ -357,8 +412,12 @@ export const GoalDetailPanel: React.FC = () => {
   }
 
   const handleAdd = () => {
-    if (newTitle.trim()) {
-      addGoal(newTitle.trim());
+    if (newTitle.trim() && selectedRoleId) {
+      createGoalMutation.mutate({
+        roleId: selectedRoleId,
+        title: newTitle.trim(),
+        sortOrder: roleGoals.length,
+      });
       setNewTitle("");
     }
   };
@@ -366,20 +425,24 @@ export const GoalDetailPanel: React.FC = () => {
   return (
     <div className="goal-detail-panel">
       <div className="goal-detail-header">
-        <span className="goal-detail-title">{role.icon} {role.name}</span>
+        <span className="goal-detail-title">
+          {role.icon} {role.name}
+        </span>
         <div className="goal-add-row">
           <input
             className="goal-add-input"
             value={newTitle}
-            onChange={e => setNewTitle(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleAdd()}
+            onChange={(e) => setNewTitle(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
             placeholder="添加新目标..."
           />
-          <button className="goal-add-btn" onClick={handleAdd}>+</button>
+          <button className="goal-add-btn" onClick={handleAdd}>
+            +
+          </button>
         </div>
       </div>
       <div className="goal-list">
-        {roleGoals.map(goal => (
+        {roleGoals.map((goal) => (
           <GoalCard key={goal.id} goal={goal} />
         ))}
         {roleGoals.length === 0 && (
@@ -394,12 +457,6 @@ export const GoalDetailPanel: React.FC = () => {
 // 4. MissionPanel Main Component
 // ==========================================
 export const MissionPanel: React.FC = () => {
-  const init = useMissionStore(s => s.init);
-
-  useEffect(() => {
-    init();
-  }, [init]);
-
   return (
     <div className="mission-panel">
       <MissionStatementEditor />

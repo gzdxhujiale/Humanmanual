@@ -1,5 +1,7 @@
 import React, { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@humanmanual/core";
 import type { ToolConfig } from "./types";
 import { DesktopMenuBar, DesktopToolbar, type ToolbarProps } from "./DesktopLayout";
 import "./AppLayout.css";
@@ -19,18 +21,21 @@ export const AppLayout: React.FC<{
   toolbar: React.ReactNode;
   mainContent: React.ReactNode;
 }> = ({ menuBar, toolbar, mainContent }) => {
+  const queryClient = useQueryClient();
   useEffect(() => {
     const unlistenPromise = listen("db:synced", () => {
-      import("../../features/time-management/timeManagementStore").then(m => void m.useTimeStore.getState().syncAllFromDB());
+      // TanStack Query-owned modules: refetch through the cache.
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.habits.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dailyReviews.all });
+      // Store-owned modules still reload imperatively.
       import("../../features/lists/listsStore").then(m => void m.useListsStore.getState().init());
-      import("../../features/habit/habitStore").then(m => void m.useHabitStore.getState().loadAll());
-      import("../../features/daily-review/dailyReviewStore").then(m => void m.useDailyReviewStore.getState().syncAllFromDB());
       import("../../features/pomodoro/pomodoroStore").then(m => void m.usePomodoroStore.getState().syncAllFromDB());
     });
     return () => {
       unlistenPromise.then((unlisten: () => void) => unlisten()).catch(() => {});
     };
-  }, []);
+  }, [queryClient]);
 
   return (
     <div className="app-layout">

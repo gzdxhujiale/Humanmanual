@@ -21,6 +21,15 @@ import {
 } from 'lucide-react';
 import { Habit, HabitStats } from './habitTypes';
 import { useHabitStore } from './habitStore';
+import {
+  useHabitData,
+  useCreateHabitMutation,
+  useUpdateHabitMutation,
+  useDeleteHabitMutation,
+  useToggleCheckInMutation,
+} from './useHabitQuery';
+import * as habitSelectors from './habitSelectors';
+import type { HabitCheckIn } from './habitTypes';
 import { useConfirmDialog } from '../../components/ui/ConfirmDeleteDialog';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { formatDateYMD as formatDateStr } from '../../lib/dateUtils';
@@ -242,12 +251,16 @@ const DateSwitcher: React.FC<DateSwitcherProps> = ({ currentDate, onChange }) =>
 // Sub-component: OverviewCards (data-driven)
 // ============================================================
 
+// Stable empty references so query-cache misses don't churn memo deps.
+const EMPTY_CHECKINS: HabitCheckIn[] = [];
+const EMPTY_HABITS: Habit[] = [];
+
 const OverviewCards: React.FC<{ habit: Habit }> = ({ habit }) => {
   const currentDate = useHabitStore(state => state.currentDate);
-  const getStats = useHabitStore(state => state.getStats);
-  const checkIns = useHabitStore(state => state.checkIns);
+  const { data } = useHabitData();
+  const checkIns = data?.checkIns ?? EMPTY_CHECKINS;
 
-  const stats = useMemo(() => getStats(habit.id, currentDate), [checkIns, habit.id, currentDate, getStats]);
+  const stats = useMemo(() => habitSelectors.getStats(checkIns, habit.id, currentDate), [checkIns, habit.id, currentDate]);
 
   return (
     <div className="grid grid-cols-2 gap-3 w-full">
@@ -271,7 +284,8 @@ const OverviewCards: React.FC<{ habit: Habit }> = ({ habit }) => {
 // ============================================================
 
 const CalendarHeatmapComponent: React.FC<{ habit: Habit }> = ({ habit }) => {
-  const checkIns = useHabitStore(state => state.checkIns);
+  const { data } = useHabitData();
+  const checkIns = data?.checkIns ?? EMPTY_CHECKINS;
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   // Pre-build a Set for O(1) check-in lookup instead of O(n) .some()
@@ -628,8 +642,8 @@ interface HabitSidebarProps {
 }
 
 const HabitSidebar: React.FC<HabitSidebarProps> = ({ habit, onClose }) => {
-  const deleteHabit = useHabitStore(state => state.deleteHabit);
-  const updateHabit = useHabitStore(state => state.updateHabit);
+  const deleteHabitMutation = useDeleteHabitMutation();
+  const updateHabitMutation = useUpdateHabitMutation();
   const { confirm: confirmDelete } = useConfirmDialog();
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -642,7 +656,7 @@ const HabitSidebar: React.FC<HabitSidebarProps> = ({ habit, onClose }) => {
     });
     if (confirmed) {
       try {
-        await deleteHabit(habit.id);
+        await deleteHabitMutation.mutateAsync(habit.id);
         onClose();
       } catch (err) {
         logError('habitPanel', 'failed to delete habit', err);
@@ -703,7 +717,7 @@ const HabitSidebar: React.FC<HabitSidebarProps> = ({ habit, onClose }) => {
         onCancel={() => setIsEditModalVisible(false)}
         onSubmit={async (data) => {
           if (data.name) {
-            await updateHabit(habit.id, data);
+            await updateHabitMutation.mutateAsync({ id: habit.id, payload: data });
           }
           setIsEditModalVisible(false);
         }}
@@ -725,21 +739,20 @@ interface HabitItemProps {
 const HabitItem: React.FC<HabitItemProps> = ({ habit, onClick }) => {
   const currentDate = useHabitStore(state => state.currentDate);
   const setCurrentDate = useHabitStore(state => state.setCurrentDate);
-  const checkIns = useHabitStore(state => state.checkIns);
-  const getStats = useHabitStore(state => state.getStats);
-  const toggleCheckIn = useHabitStore(state => state.toggleCheckIn);
-  const getCheckInStatus = useHabitStore(state => state.getCheckInStatus);
+  const { data } = useHabitData();
+  const checkIns = data?.checkIns ?? EMPTY_CHECKINS;
+  const toggleCheckIn = useToggleCheckInMutation();
 
-  const stats = useMemo(() => getStats(habit.id, currentDate), [checkIns, habit.id, currentDate, getStats]);
+  const stats = useMemo(() => habitSelectors.getStats(checkIns, habit.id, currentDate), [checkIns, habit.id, currentDate]);
 
   const last7Days = useMemo(() => {
     const headerDays = getDaysAround();
     return headerDays.map(d => ({
       dateStr: d.dateStr,
-      isCheckedIn: getCheckInStatus(habit.id, d.dateStr),
+      isCheckedIn: habitSelectors.getCheckInStatus(checkIns, habit.id, d.dateStr),
       isActiveDate: d.dateStr === currentDate
     }));
-  }, [currentDate, checkIns, habit.id, getCheckInStatus]);
+  }, [currentDate, checkIns, habit.id]);
 
   const handleDotClick = (e: React.MouseEvent, dateStr: string, isActiveDate: boolean) => {
     e.stopPropagation();
@@ -747,7 +760,8 @@ const HabitItem: React.FC<HabitItemProps> = ({ habit, onClick }) => {
       setCurrentDate(dateStr);
     }
     // Direct toggle check-in without modal popup
-    toggleCheckIn(habit.id, dateStr);
+    const completed = !habitSelectors.getCheckInStatus(checkIns, habit.id, dateStr);
+    toggleCheckIn.mutate({ habitId: habit.id, date: dateStr, completed });
   };
 
   return (
@@ -815,9 +829,9 @@ interface HabitListProps {
 
 const HabitList: React.FC<HabitListProps> = ({ onHabitClick }) => {
   const currentDate = useHabitStore(state => state.currentDate);
-  const allHabits = useHabitStore(state => state.habits);
-  const getHabitsForDate = useHabitStore(state => state.getHabitsForDate);
-  const habits = useMemo(() => getHabitsForDate(currentDate), [getHabitsForDate, currentDate, allHabits]);
+  const { data } = useHabitData();
+  const allHabits = data?.habits ?? EMPTY_HABITS;
+  const habits = useMemo(() => habitSelectors.getHabitsForDate(allHabits, currentDate), [allHabits, currentDate]);
 
   if (habits.length === 0) {
     return (
@@ -849,12 +863,12 @@ const HabitList: React.FC<HabitListProps> = ({ onHabitClick }) => {
 // ============================================================
 
 export const HabitPanel: React.FC = () => {
-  const loadAll = useHabitStore(state => state.loadAll);
   const currentDate = useHabitStore(state => state.currentDate);
   const setCurrentDate = useHabitStore(state => state.setCurrentDate);
-  const createHabit = useHabitStore(state => state.createHabit);
-  const habits = useHabitStore(state => state.habits);
-  const getCheckInStatus = useHabitStore(state => state.getCheckInStatus);
+  const createHabitMutation = useCreateHabitMutation();
+  const { data } = useHabitData();
+  const habits = data?.habits ?? EMPTY_HABITS;
+  const checkIns = data?.checkIns ?? EMPTY_CHECKINS;
 
   // Store IDs instead of objects — derive the actual Habit via useMemo
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
@@ -868,9 +882,8 @@ export const HabitPanel: React.FC = () => {
   const notifiedSetRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    loadAll();
     requestNotificationPermission();
-  }, [loadAll]);
+  }, []);
 
   // Background timer for habit check-in pop-up reminders (30s interval)
   useEffect(() => {
@@ -885,7 +898,7 @@ export const HabitPanel: React.FC = () => {
           const notifyKey = `${todayStr}_${habit.id}_${habitHHMM}`;
 
           if (currHHMM === habitHHMM && !notifiedSetRef.current.has(notifyKey)) {
-            const isCheckedIn = getCheckInStatus(habit.id, todayStr);
+            const isCheckedIn = habitSelectors.getCheckInStatus(checkIns, habit.id, todayStr);
             if (!isCheckedIn) {
               notifiedSetRef.current.add(notifyKey);
               // Send desktop system notification directly (same as Pomodoro)
@@ -900,7 +913,7 @@ export const HabitPanel: React.FC = () => {
     }, 30_000);
 
     return () => clearInterval(timer);
-  }, [habits, getCheckInStatus]);
+  }, [habits, checkIns]);
 
   const handleHabitClick = (habit: Habit) => setSelectedHabitId(habit.id);
   const handleCloseSidebar = () => setSelectedHabitId(null);
@@ -951,7 +964,9 @@ export const HabitPanel: React.FC = () => {
       <CreateEditModal
         visible={isCreateModalVisible}
         onCancel={() => setIsCreateModalVisible(false)}
-        onSubmit={createHabit}
+        onSubmit={async (payload) => {
+          await createHabitMutation.mutateAsync(payload);
+        }}
       />
     </div>
   );

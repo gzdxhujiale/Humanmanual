@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Star, Cloud, Zap, Award, BarChart3 } from 'lucide-react';
 import dayjs from 'dayjs';
-import { useDailyReviewStore } from './dailyReviewStore';
+import { useDailyReviewData, useReviewActions } from './useDailyReviewQuery';
+import * as dailyReviewSelectors from './dailyReviewSelectors';
 import { DailyReview, CompoundStats as CompoundStatsType } from './dailyReviewTypes';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import { useReviewAutoSave } from './useReviewAutoSave';
@@ -244,6 +245,8 @@ const CompoundStats: React.FC<CompoundStatsProps> = ({ stats, reviews, onSelectD
 // ==========================================
 const getTodayStr = (): string => todayYMD();
 
+const EMPTY_REVIEWS: DailyReview[] = [];
+
 const formatDateDisplay = (dateStr: string): string => {
   const [y, m, d] = dateStr.split('-').map(Number);
   return `${y}年${m}月${d}日`;
@@ -251,22 +254,17 @@ const formatDateDisplay = (dateStr: string): string => {
 
 export const DailyReviewPanel: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(getTodayStr());
-  
-  const reviewsData = useDailyReviewStore(state => state.data.reviews);
-  const getAllReviews = useDailyReviewStore(state => state.getAllReviews);
-  const getReviewByDate = useDailyReviewStore(state => state.getReviewByDate);
-  const getCompoundStats = useDailyReviewStore(state => state.getCompoundStats);
-  
-  const reviews = useMemo(() => getAllReviews(), [reviewsData, getAllReviews]);
-  const stats = useMemo(() => getCompoundStats(), [reviewsData, getCompoundStats]);
-  const currentReview = useMemo(() => getReviewByDate(selectedDate), [reviewsData, selectedDate, getReviewByDate]);
-  
-  const syncAllFromDB = useDailyReviewStore(state => state.syncAllFromDB);
-  const saveReview = useDailyReviewStore(state => state.saveReview);
 
-  useEffect(() => {
-    syncAllFromDB();
-  }, [syncAllFromDB]);
+  const { data } = useDailyReviewData();
+  const reviewsData = data ?? EMPTY_REVIEWS;
+  const { saveReview } = useReviewActions();
+
+  const reviews = useMemo(() => dailyReviewSelectors.getAllReviews(reviewsData), [reviewsData]);
+  const stats = useMemo(() => dailyReviewSelectors.getCompoundStats(reviewsData), [reviewsData]);
+  const currentReview = useMemo(
+    () => dailyReviewSelectors.getReviewByDate(reviewsData, selectedDate),
+    [reviewsData, selectedDate]
+  );
 
   const handleSave = (date: string, content: string, rating: number, isHighFreq?: boolean) => {
     saveReview(date, content, rating, isHighFreq);

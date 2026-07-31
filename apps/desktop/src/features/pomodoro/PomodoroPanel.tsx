@@ -8,10 +8,15 @@ import {
 } from 'lucide-react';
 import { requestNotificationPermission, usePomodoroStore } from './pomodoroStore';
 import { FavoriteFocusTask, LinkedTarget, PomodoroMode, PomodoroRecord } from './pomodoroTypes';
-import { useTimeStore } from '../time-management/timeManagementStore';
-import { useHabitStore } from '../habit/habitStore';
+import { useTimeManagementData } from '../time-management/useTimeManagementQuery';
+import type { Task } from '../time-management/timeManagementTypes';
+import { useHabitData } from '../habit/useHabitQuery';
+import type { Habit } from '../habit/habitTypes';
 import { useConfirmDialog } from '../../components/ui/ConfirmDeleteDialog';
 import './pomodoro.css';
+
+const EMPTY_TIME_TASKS: Task[] = [];
+const EMPTY_HABITS: Habit[] = [];
 
 // ==========================================
 // 0. Shared Helpers & Custom Hooks
@@ -336,8 +341,8 @@ const FavoriteTaskModal: React.FC<FavoriteTaskModalProps> = memo(({ initialTask,
   const addFavoriteTask = usePomodoroStore(s => s.addFavoriteTask);
   const updateFavoriteTask = usePomodoroStore(s => s.updateFavoriteTask);
 
-  const timeTasks = useTimeStore((state) => state.data.tasks);
-  const habits = useHabitStore((state) => state.habits);
+  const timeTasks = useTimeManagementData().data?.tasks ?? EMPTY_TIME_TASKS;
+  const habits = useHabitData().data?.habits ?? EMPTY_HABITS;
 
   const [name, setName] = useState(initialTask?.name || '');
   const [icon, setIcon] = useState(initialTask?.icon || '😊');
@@ -350,11 +355,6 @@ const FavoriteTaskModal: React.FC<FavoriteTaskModalProps> = memo(({ initialTask,
   const [linkTab, setLinkTab] = useState<'quadrant' | 'habit'>('quadrant');
 
   const linkDropdownRef = useClickOutside<HTMLDivElement>(() => setShowLinkDropdown(false));
-
-  useEffect(() => {
-    useTimeStore.getState().syncAllFromDB();
-    useHabitStore.getState().loadAll();
-  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

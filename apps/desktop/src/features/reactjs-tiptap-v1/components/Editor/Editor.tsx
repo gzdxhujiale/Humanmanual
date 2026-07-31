@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, memo, useMemo } from 'react';
 import { MoreHorizontal, LayoutTemplate } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Button } from '../ui/button';
-import { useTemplateStore } from '../../../templates/templateStore';
+import { useTemplateData, useTemplateActions } from '../../../templates/useTemplateQuery';
 import { TemplateModal } from '../../../templates/TemplateModal';
 import { Template } from '../../../templates/templateTypes';
 import { InteractivePlaceholder } from '../../lib/InteractivePlaceholder';
@@ -516,9 +516,8 @@ export function Editor({
 
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
 
-  const templates = useTemplateStore((state) => state.templates);
-  const updateTemplate = useTemplateStore((state) => state.updateTemplate);
-  const deleteTemplate = useTemplateStore((state) => state.deleteTemplate);
+  const templates = useTemplateData().data ?? [];
+  const { updateTemplate, deleteTemplate } = useTemplateActions();
 
   // Store last emitted content to avoid feedback loops and unnecessary setContent calls
   const lastEmittedValueRef = useRef<string>('');

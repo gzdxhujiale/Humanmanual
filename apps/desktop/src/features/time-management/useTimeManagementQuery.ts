@@ -1,8 +1,19 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { queryKeys } from '@humanmanual/core';
+import { useMemo } from 'react';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  queryKeys,
+  sharedSyncEngine,
+  HIGH_FREQ_DELAY,
+  LOW_FREQ_DELAY,
+  logError,
+} from '@humanmanual/core';
 import { timeManagementApi } from './timeManagementService';
 import { Task, Role, QuadrantType } from './timeManagementTypes';
-import { TimeManagementData } from './timeManagementStore';
+
+export interface TimeManagementData {
+  roles: Role[];
+  tasks: Task[];
+}
 
 const PREDEFINED_COLORS = ['#1f6fd1', '#25845a', '#d97706', '#7657d6', '#d32f2f', '#0ea5e9'];
 
@@ -33,21 +44,31 @@ export function useTimeManagementData() {
   });
 }
 
-export function useAddTaskMutation() {
+function setTasksData(
+  queryClient: QueryClient,
+  updater: (prev: TimeManagementData) => TimeManagementData
+) {
+  queryClient.setQueryData<TimeManagementData>(queryKeys.tasks.all, (prev) =>
+    updater(prev ?? { roles: [], tasks: [] })
+  );
+}
+
+export interface TaskActions {
+  addTask: (title: string, quadrant?: QuadrantType, scheduledDate?: string, roleId?: string) => Task;
+  updateTask: (taskId: string, updates: Partial<Task>, isHighFreq?: boolean) => void;
+  deleteTask: (taskId: string) => void;
+}
+
+/**
+ * Write path for tasks: optimistic query-cache update + debounced persistence
+ * via sharedSyncEngine (`task:` keys). useSyncQueryInvalidator refetches the
+ * cache once persistence completes, keeping the cache authoritative.
+ */
+export function useTaskActions(): TaskActions {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({
-      title,
-      quadrant = 'Q2',
-      scheduledDate,
-      roleId,
-    }: {
-      title: string;
-      quadrant?: QuadrantType;
-      scheduledDate?: string;
-      roleId?: string;
-    }): Promise<Task> => {
+  return useMemo<TaskActions>(() => ({
+    addTask: (title, quadrant = 'Q2', scheduledDate, roleId) => {
       const newTask: Task = {
         id: crypto.randomUUID(),
         title,
@@ -57,119 +78,42 @@ export function useAddTaskMutation() {
         completed: false,
         createdAt: Date.now(),
       };
-      await timeManagementApi.upsertTask(newTask);
+      setTasksData(queryClient, (prev) => ({ ...prev, tasks: [...prev.tasks, newTask] }));
+      sharedSyncEngine.schedule(`task:${newTask.id}`, () => timeManagementApi.upsertTask(newTask), LOW_FREQ_DELAY);
       return newTask;
     },
 
-    // Optimistic Update
-    onMutate: async (newTaskParams) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.tasks.all });
-      const previousData = queryClient.getQueryData<TimeManagementData>(queryKeys.tasks.all);
-
-      if (previousData) {
-        const optimisticTask: Task = {
-          id: 'temp-' + Date.now(),
-          title: newTaskParams.title,
-          quadrant: newTaskParams.quadrant || 'Q2',
-          scheduledDate: newTaskParams.scheduledDate,
-          roleId: newTaskParams.roleId,
-          completed: false,
-          createdAt: Date.now(),
-        };
-
-        queryClient.setQueryData<TimeManagementData>(queryKeys.tasks.all, {
-          ...previousData,
-          tasks: [...previousData.tasks, optimisticTask],
+    updateTask: (taskId, updates, isHighFreq = true) => {
+      let nextTask: Task | undefined;
+      setTasksData(queryClient, (prev) => {
+        const tasks = prev.tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          nextTask = { ...t, ...updates };
+          return nextTask;
         });
-      }
-
-      return { previousData };
-    },
-
-    onError: (_err, _newTask, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(queryKeys.tasks.all, context.previousData);
-      }
-    },
-
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    },
-  });
-}
-
-export function useUpdateTaskMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ taskId, updates }: { taskId: string; updates: Partial<Task> }) => {
-      const currentData = queryClient.getQueryData<TimeManagementData>(queryKeys.tasks.all);
-      const existingTask = currentData?.tasks.find((t) => t.id === taskId);
-      if (!existingTask) return;
-
-      const updatedTask = { ...existingTask, ...updates };
-      await timeManagementApi.upsertTask(updatedTask);
-      return updatedTask;
-    },
-
-    // Optimistic Update
-    onMutate: async ({ taskId, updates }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.tasks.all });
-      const previousData = queryClient.getQueryData<TimeManagementData>(queryKeys.tasks.all);
-
-      if (previousData) {
-        queryClient.setQueryData<TimeManagementData>(queryKeys.tasks.all, {
-          ...previousData,
-          tasks: previousData.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
-        });
-      }
-
-      return { previousData };
-    },
-
-    onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(queryKeys.tasks.all, context.previousData);
+        return { ...prev, tasks };
+      });
+      if (nextTask) {
+        const task = nextTask;
+        sharedSyncEngine.schedule(
+          `task:${taskId}`,
+          () => timeManagementApi.upsertTask(task),
+          isHighFreq ? HIGH_FREQ_DELAY : LOW_FREQ_DELAY
+        );
       }
     },
 
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    deleteTask: (taskId) => {
+      setTasksData(queryClient, (prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => t.id !== taskId),
+      }));
+      // Cancel any pending upsert so it cannot resurrect the deleted task.
+      sharedSyncEngine.cancel(`task:${taskId}`);
+      timeManagementApi.deleteTask(taskId).catch((e) => {
+        logError('useTimeManagementQuery', 'failed to delete task', e);
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      });
     },
-  });
-}
-
-export function useDeleteTaskMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (taskId: string) => {
-      await timeManagementApi.deleteTask(taskId);
-    },
-
-    // Optimistic Update
-    onMutate: async (taskId) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.tasks.all });
-      const previousData = queryClient.getQueryData<TimeManagementData>(queryKeys.tasks.all);
-
-      if (previousData) {
-        queryClient.setQueryData<TimeManagementData>(queryKeys.tasks.all, {
-          ...previousData,
-          tasks: previousData.tasks.filter((t) => t.id !== taskId),
-        });
-      }
-
-      return { previousData };
-    },
-
-    onError: (_err, _taskId, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(queryKeys.tasks.all, context.previousData);
-      }
-    },
-
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    },
-  });
+  }), [queryClient]);
 }

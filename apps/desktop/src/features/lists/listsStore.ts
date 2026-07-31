@@ -1,12 +1,9 @@
 import { create } from 'zustand';
 import { emit, listen } from '@tauri-apps/api/event';
-import { List, Folder, Note, Template, ListsData, NoteGroup } from './listsTypes';
+import { List, Folder, Note, ListsData, NoteGroup } from './listsTypes';
 import * as listsService from './listsService';
 import { createSyncEngine, HIGH_FREQ_DELAY, LOW_FREQ_DELAY } from '@humanmanual/core';
 import { logError, logSilent } from '@humanmanual/core';
-import { callSilent } from '../../lib/tauriClient';
-import { useTemplateStore } from '../templates/templateStore';
-import { DEFAULT_TEMPLATES } from '../templates/templateTypes';
 
 
 
@@ -87,12 +84,6 @@ interface ListsStoreState {
   addGroup: (listId: string, name: string) => NoteGroup;
   updateGroup: (id: string, updates: Partial<NoteGroup>) => void;
   deleteGroup: (id: string) => void;
-  
-  // Templates
-  getTemplates: () => Template[];
-  addTemplate: (name: string, content: string) => Template;
-  updateTemplate: (id: string, updates: Partial<Template>) => void;
-  deleteTemplate: (id: string) => void;
 }
 
 const syncEngine = createSyncEngine();
@@ -103,7 +94,7 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
     folders: [],
     noteGroups: [],
     notes: [],
-    templates: DEFAULT_TEMPLATES,
+    templates: [],
   },
   initialized: false,
   initPromise: null,
@@ -117,29 +108,13 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
       try {
         const allData = await listsService.loadAll();
 
-        // 默认模板只在首次运行时 seed 一次（标记存 app_preferences，随双层持久化同步）；
-        // “DB 为空”不等于“首次运行”，否则用户删光模板后重启会复活默认模板
-        const TEMPLATES_SEEDED_KEY = 'templates-seeded-v1';
-        let defaultTemplates = allData.templates;
-        if (allData.templates.length === 0) {
-          const seeded = await callSilent<string | null>('db_get_preference', { key: TEMPLATES_SEEDED_KEY }, null);
-          if (!seeded) {
-            defaultTemplates = DEFAULT_TEMPLATES;
-            for (const t of DEFAULT_TEMPLATES) {
-              listsService.upsertTemplate(t).catch((err) => logError('listsStore', 'failed to seed default template', err));
-            }
-          }
-        }
-        void callSilent('db_set_preference', { key: TEMPLATES_SEEDED_KEY, value: 'true' }, undefined);
-        useTemplateStore.getState().setTemplates(defaultTemplates);
-
         set({
           data: {
             folders: allData.folders.map(f => ({ ...f })),
             lists: allData.lists.map(l => ({ ...l, viewType: l.viewType as 'list' | 'board' })),
             noteGroups: allData.noteGroups.map(g => ({ ...g })),
             notes: allData.notes.map(n => ({ ...n })),
-            templates: defaultTemplates,
+            templates: allData.templates,
           },
           initialized: true
         });
@@ -629,10 +604,4 @@ export const useListsStore = create<ListsStoreState>((set, get) => ({
     syncEngine.cancel(`group:${id}`);
     listsService.deleteGroup(id).catch(() => {});
   },
-
-  // ── Templates (Delegated to useTemplateStore) ──
-  getTemplates: () => useTemplateStore.getState().getTemplates(),
-  addTemplate: (name, content) => useTemplateStore.getState().addTemplate(name, content),
-  updateTemplate: (id, updates) => useTemplateStore.getState().updateTemplate(id, updates),
-  deleteTemplate: (id) => useTemplateStore.getState().deleteTemplate(id),
 }));

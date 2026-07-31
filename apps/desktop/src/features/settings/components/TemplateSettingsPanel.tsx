@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Plus, Search, Edit2, Trash2, ArrowLeft } from 'lucide-react';
-import { useTemplateStore, Template, getTemplatePreviewText } from '../../templates';
+import { useTemplateData, useTemplateActions, Template, getTemplatePreviewText } from '../../templates';
 import { ReactjsTiptapEditor } from '../../reactjs-tiptap-v1';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDeleteDialog';
 
 export function TemplateSettingsPanel() {
-  const templates = useTemplateStore((state) => state.templates);
-  const addTemplate = useTemplateStore((state) => state.addTemplate);
-  const updateTemplate = useTemplateStore((state) => state.updateTemplate);
-  const deleteTemplate = useTemplateStore((state) => state.deleteTemplate);
+  const { data } = useTemplateData();
+  const templates = data ?? [];
+  const { addTemplate, updateTemplate, deleteTemplate } = useTemplateActions();
   const { confirm: confirmDelete } = useConfirmDialog();
 
   const [searchQuery, setSearchQuery] = useState('');

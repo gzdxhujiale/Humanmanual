@@ -28,6 +28,11 @@ export const queryKeys = {
     range: (start: string, end: string) => [...queryKeys.dailyReviews.all, 'range', start, end] as const,
   },
 
+  // Note templates module
+  templates: {
+    all: ['templates'] as const,
+  },
+
   // Lists & Notes module
   lists: {
     all: ['lists'] as const,

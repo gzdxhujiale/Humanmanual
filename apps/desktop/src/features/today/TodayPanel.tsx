@@ -1,12 +1,21 @@
 import React from "react";
-import { useTimeStore } from "../time-management/timeManagementStore";
+import { useTimeManagementData, useTaskActions } from "../time-management/useTimeManagementQuery";
 import type { Task } from "../time-management/timeManagementTypes";
 import { openQuickEditWindow, requestQuickEditCloseLayer } from "../time-management/quickEditWindow";
-import { useHabitStore } from "../habit/habitStore";
-import { useDailyReviewStore } from "../daily-review/dailyReviewStore";
+import { useHabitData, useToggleCheckInMutation } from "../habit/useHabitQuery";
+import type { Habit, HabitCheckIn } from "../habit/habitTypes";
+import * as habitSelectors from "../habit/habitSelectors";
+import { useDailyReviewData } from "../daily-review/useDailyReviewQuery";
+import type { DailyReview } from "../daily-review/dailyReviewTypes";
+import * as dailyReviewSelectors from "../daily-review/dailyReviewSelectors";
 import { formatDateYMD, todayYMD } from "../../lib/dateUtils";
 import "../time-management/timeManagement.css";
 import "./today.css";
+
+const EMPTY_TASKS: Task[] = [];
+const EMPTY_HABITS: Habit[] = [];
+const EMPTY_CHECKINS: HabitCheckIn[] = [];
+const EMPTY_REVIEWS: DailyReview[] = [];
 
 const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 const MONTH_LABELS = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
@@ -35,31 +44,21 @@ export interface TodayPanelProps {
 }
 
 export function TodayPanel({ onNavigate }: TodayPanelProps) {
-  const tasks = useTimeStore((s) => s.data.tasks);
-  const updateTask = useTimeStore((s) => s.updateTask);
-  const syncTasksFromDB = useTimeStore((s) => s.syncAllFromDB);
+  const { data: timeData } = useTimeManagementData();
+  const tasks = timeData?.tasks ?? EMPTY_TASKS;
+  const { updateTask } = useTaskActions();
 
-  const habits = useHabitStore((s) => s.habits);
-  const checkIns = useHabitStore((s) => s.checkIns);
-  const loadHabits = useHabitStore((s) => s.loadAll);
-  const toggleCheckIn = useHabitStore((s) => s.toggleCheckIn);
-  const getHabitsForDate = useHabitStore((s) => s.getHabitsForDate);
-  const getCheckInStatus = useHabitStore((s) => s.getCheckInStatus);
-  const getStats = useHabitStore((s) => s.getStats);
+  const { data: habitData } = useHabitData();
+  const habits = habitData?.habits ?? EMPTY_HABITS;
+  const checkIns = habitData?.checkIns ?? EMPTY_CHECKINS;
+  const toggleCheckIn = useToggleCheckInMutation();
 
-  const reviews = useDailyReviewStore((s) => s.data.reviews);
-  const getAllReviews = useDailyReviewStore((s) => s.getAllReviews);
-  const syncReviewsFromDB = useDailyReviewStore((s) => s.syncAllFromDB);
+  const { data: reviewsData } = useDailyReviewData();
+  const reviews = reviewsData ?? EMPTY_REVIEWS;
 
   const [showDone, setShowDone] = React.useState(false);
   const [quickEditOpen, setQuickEditOpen] = React.useState(false);
   const [meterReady, setMeterReady] = React.useState(false);
-
-  React.useEffect(() => {
-    syncTasksFromDB();
-    loadHabits();
-    syncReviewsFromDB();
-  }, [syncTasksFromDB, loadHabits, syncReviewsFromDB]);
 
   React.useEffect(() => {
     const raf = requestAnimationFrame(() => setMeterReady(true));
@@ -86,14 +85,13 @@ export function TodayPanel({ onNavigate }: TodayPanelProps) {
   void checkIns;
   void reviews;
   const todayHabits = React.useMemo(
-    () => getHabitsForDate(today),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [habits, today, getHabitsForDate]
+    () => habitSelectors.getHabitsForDate(habits, today),
+    [habits, today]
   );
-  const uncheckedHabits = todayHabits.filter((h) => !getCheckInStatus(h.id, today));
-  const checkedHabits = todayHabits.filter((h) => getCheckInStatus(h.id, today));
+  const uncheckedHabits = todayHabits.filter((h) => !habitSelectors.getCheckInStatus(checkIns, h.id, today));
+  const checkedHabits = todayHabits.filter((h) => habitSelectors.getCheckInStatus(checkIns, h.id, today));
 
-  const reviewWritten = getAllReviews().some((r) => r.date === today);
+  const reviewWritten = dailyReviewSelectors.getAllReviews(reviews).some((r) => r.date === today);
 
   const totalCount = dueTasks.length + todayHabits.length + 1;
   const remaining = pendingTasks.length + uncheckedHabits.length + (reviewWritten ? 0 : 1);
@@ -231,8 +229,8 @@ export function TodayPanel({ onNavigate }: TodayPanelProps) {
                   {uncheckedHabits.map((habit) => (
                     <div key={habit.id} className="today-habit-row">
                       <span className="today-habit-name">{habit.name}</span>
-                      <span className="today-habit-streak">连续 {getStats(habit.id, today).currentStreak} 天</span>
-                      <button type="button" className="today-btn-check" onClick={() => toggleCheckIn(habit.id, today)}>
+                      <span className="today-habit-streak">连续 {habitSelectors.getStats(checkIns, habit.id, today).currentStreak} 天</span>
+                      <button type="button" className="today-btn-check" onClick={() => toggleCheckIn.mutate({ habitId: habit.id, date: today, completed: true })}>
                         打卡
                       </button>
                     </div>
@@ -240,7 +238,7 @@ export function TodayPanel({ onNavigate }: TodayPanelProps) {
                   {checkedHabits.map((habit) => (
                     <div key={habit.id} className="today-habit-row done">
                       <span className="today-habit-name">{habit.name}</span>
-                      <span className="today-habit-streak">连续 {getStats(habit.id, today).currentStreak} 天</span>
+                      <span className="today-habit-streak">连续 {habitSelectors.getStats(checkIns, habit.id, today).currentStreak} 天</span>
                       <span className="today-habit-done-mark" aria-label="已打卡">✓</span>
                     </div>
                   ))}

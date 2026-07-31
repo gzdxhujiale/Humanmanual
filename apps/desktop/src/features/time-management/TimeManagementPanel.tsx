@@ -8,15 +8,18 @@ import {
 import { DayPicker } from 'react-day-picker';
 import dayjs from 'dayjs';
 import 'react-day-picker/dist/style.css';
-import { useTimeStore } from './timeManagementStore';
-import { QuadrantType, Task } from './timeManagementTypes';
+import { useTimeManagementData, useTaskActions } from './useTimeManagementQuery';
+import { QuadrantType, Task, Role } from './timeManagementTypes';
 import { WeeklyPlanning } from './WeeklyPlanning';
 import { usePreferencesStore } from '../settings/preferencesStore';
-import { useMissionStore } from '../mission/missionStore';
 import { todayYMD } from '../../lib/dateUtils';
 import { ReactjsTiptapEditor } from '../reactjs-tiptap-v1';
 import { openQuickEditWindow, requestQuickEditCloseLayer } from './quickEditWindow';
 import './timeManagement.css';
+
+// Stable empty-array references so query-cache misses don't create new arrays each render
+const EMPTY_TASKS: Task[] = [];
+const EMPTY_ROLES: Role[] = [];
 
 // ==========================================
 // 0. Shared Helpers & Custom Hooks
@@ -886,13 +889,11 @@ export interface TimeManagementPanelProps {
 export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProps) {
   const activeTab = mode;
 
-  const roles = useTimeStore(s => s.data.roles);
-  const tasks = useTimeStore(s => s.data.tasks);
+  const { data: tmData } = useTimeManagementData();
+  const roles = tmData?.roles ?? EMPTY_ROLES;
+  const tasks = tmData?.tasks ?? EMPTY_TASKS;
 
-  const syncAllFromDB = useTimeStore(s => s.syncAllFromDB);
-  const updateTask = useTimeStore(s => s.updateTask);
-  const addTask = useTimeStore(s => s.addTask);
-  const deleteTask = useTimeStore(s => s.deleteTask);
+  const { addTask, updateTask, deleteTask } = useTaskActions();
 
   const hideCompletedStr = usePreferencesStore(state => state.getPreference('tm-hide-completed', 'false'));
   const hideCompleted = hideCompletedStr === 'true';
@@ -905,11 +906,6 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
   const [menuOpen, setMenuOpen] = useState(false);
 
   const menuRef = useClickOutside<HTMLDivElement>(() => setMenuOpen(false));
-
-  useEffect(() => {
-    useMissionStore.getState().init();
-    syncAllFromDB();
-  }, [syncAllFromDB]);
 
   useEffect(() => {
     if (tasks.length === 0) return;
