@@ -128,6 +128,7 @@ pub async fn habit_create(payload: HabitPayload, db: State<'_, TursoDb>) -> AppR
         libsql::params![id.clone(), name_val.clone(), payload.frequency.clone(), payload.goal.clone(), start_date_val.clone(), payload.duration.clone(), payload.group.clone(), reminder_val.clone(), auto_popup_log_val, now.clone(), now.clone()],
     ).await?;
 
+    db.push_sync();
     Ok(Habit {
         id,
         name: name_val,
@@ -156,6 +157,7 @@ pub async fn habit_update(id: String, payload: HabitPayload, db: State<'_, Turso
         libsql::params![payload.name, payload.frequency, payload.goal, payload.start_date, payload.duration, payload.group, reminder_val, auto_popup_log_val, now, id],
     ).await?;
 
+    db.push_sync();
     Ok(())
 }
 
@@ -171,6 +173,8 @@ pub async fn habit_delete(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
         "UPDATE habits SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id],
     ).await?;
+
+    db.push_sync();
     Ok(())
 }
 
@@ -195,6 +199,8 @@ pub async fn habit_toggle_checkin(
         "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL AND habit_id = ?1 AND date = ?2",
         libsql::params![habit_id.clone(), date.clone()],
     ).await?;
+
+    db.push_sync();
 
     if let Ok(Some(row)) = row_q.next().await {
         let final_completed: i32 = row.get(3).unwrap_or(0);

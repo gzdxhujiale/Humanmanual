@@ -26,6 +26,18 @@ impl TursoDb {
     pub fn conn(&self) -> Result<libsql::Connection, libsql::Error> {
         self.db.connect()
     }
+
+    /// Trigger a non-blocking background sync if connected as an embedded replica.
+    pub fn push_sync(&self) {
+        if self.is_remote {
+            let db_sync = self.db.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = db_sync.sync().await {
+                    eprintln!("[DB] Push sync error: {}", e);
+                }
+            });
+        }
+    }
 }
 
 /// 平台无关的应用数据目录（setup 时由 lib.rs 注入）：
@@ -94,6 +106,8 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
 
             let formatted_url = if url.starts_with("libsql://") {
                 url.replacen("libsql://", "https://", 1)
+            } else if url.starts_with("turso://") {
+                url.replacen("turso://", "https://", 1)
             } else if !url.starts_with("https://") && !url.starts_with("http://") {
                 format!("https://{}", url)
             } else {
@@ -107,8 +121,8 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 .sync_interval(Duration::from_secs(sync_interval_secs.max(10)))
                 .build();
 
-            // Add 800ms timeout to prevent network latency to Turso Cloud from blocking app startup
-            match tokio::time::timeout(Duration::from_millis(800), replica_fut).await {
+            // Add 1200ms timeout to prevent network latency to Turso Cloud from blocking app startup
+            match tokio::time::timeout(Duration::from_millis(1200), replica_fut).await {
                 Ok(Ok(db)) => Ok((db, true, None)),
                 Ok(Err(e)) => {
                     let err_str = e.to_string();
@@ -119,7 +133,7 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                         .map(|db| (db, false, Some(format!("ReplicaInitError: {}", err_str))))
                 }
                 Err(_) => {
-                    eprintln!("[DB] Turso Cloud connection timed out (800ms limit reached). Fallbacking immediately to local SQLite mode.");
+                    eprintln!("[DB] Turso Cloud connection timed out (1200ms limit reached). Fallbacking immediately to local SQLite mode.");
                     Builder::new_local(db_path_str)
                         .build()
                         .await
@@ -247,6 +261,7 @@ pub async fn db_set_preference(
         libsql::params![key, value],
     )
     .await?;
+    db.push_sync();
     Ok(())
 }
 

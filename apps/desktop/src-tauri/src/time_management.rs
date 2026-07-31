@@ -102,6 +102,7 @@ pub async fn tm_upsert_task(task: Task, db: State<'_, TursoDb>) -> AppResult<()>
         ).await;
     }
 
+    db.push_sync();
     Ok(())
 }
 
@@ -119,5 +120,6 @@ pub async fn tm_delete_task(id: String, db: State<'_, TursoDb>) -> AppResult<()>
         libsql::params![format!("{}@%", id)],
     ).await;
 
+    db.push_sync();
     Ok(())
 }

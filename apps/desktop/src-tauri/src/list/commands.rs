@@ -115,6 +115,7 @@ pub async fn list_upsert_folder(folder: ListFolder, db: State<'_, TursoDb>) -> A
         "INSERT INTO list_folders (id, name, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
         libsql::params![folder.id, folder.name, pinned, folder.sort_order, now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -126,6 +127,7 @@ pub async fn list_delete_folder(id: String, db: State<'_, TursoDb>) -> AppResult
         libsql::params![now.clone(), now.clone(), id.clone()]).await?;
     conn.execute("UPDATE list_lists SET folder_id = NULL, updated_at = ?1 WHERE folder_id = ?2",
         libsql::params![now, id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -133,10 +135,13 @@ pub async fn list_delete_folder(id: String, db: State<'_, TursoDb>) -> AppResult
 pub async fn list_reorder_folders(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let conn = db.conn()?;
+    let tx = conn.transaction().await?;
     for (id, order) in &items {
-        conn.execute("UPDATE list_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+        tx.execute("UPDATE list_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
             libsql::params![*order, now.clone(), id.clone()]).await?;
     }
+    tx.commit().await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -151,6 +156,7 @@ pub async fn list_upsert_list(list: ListList, db: State<'_, TursoDb>) -> AppResu
         "INSERT INTO list_lists (id, name, icon, color, view_type, folder_id, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, color = excluded.color, view_type = excluded.view_type, folder_id = excluded.folder_id, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
         libsql::params![list.id, list.name, list.icon, list.color, list.view_type, list.folder_id, pinned, list.sort_order, now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -164,6 +170,7 @@ pub async fn list_delete_list(id: String, db: State<'_, TursoDb>) -> AppResult<(
         libsql::params![now.clone(), id.clone()]).await?;
     conn.execute("UPDATE list_note_groups SET deleted_at = ?1, updated_at = ?2 WHERE list_id = ?3 AND deleted_at IS NULL",
         libsql::params![now.clone(), now, id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -171,10 +178,13 @@ pub async fn list_delete_list(id: String, db: State<'_, TursoDb>) -> AppResult<(
 pub async fn list_reorder_lists(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let conn = db.conn()?;
+    let tx = conn.transaction().await?;
     for (id, order) in &items {
-        conn.execute("UPDATE list_lists SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+        tx.execute("UPDATE list_lists SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
             libsql::params![*order, now.clone(), id.clone()]).await?;
     }
+    tx.commit().await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -184,6 +194,7 @@ pub async fn list_move_list(list_id: String, folder_id: Option<String>, sort_ord
     let conn = db.conn()?;
     conn.execute("UPDATE list_lists SET folder_id = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
         libsql::params![folder_id, sort_order, now, list_id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -245,6 +256,7 @@ pub async fn list_duplicate_list(source_id: String, new_list: ListList, db: Stat
         ).await?;
     }
 
+    db.push_sync();
     Ok(())
 }
 
@@ -259,6 +271,7 @@ pub async fn list_upsert_note(note: ListNote, db: State<'_, TursoDb>) -> AppResu
         "INSERT INTO list_notes (id, list_id, group_id, title, content, is_pinned, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO UPDATE SET list_id = excluded.list_id, group_id = excluded.group_id, title = excluded.title, content = excluded.content, is_pinned = excluded.is_pinned, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
         libsql::params![note.id, note.list_id, note.group_id, note.title, note.content, pinned, note.sort_order, now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -268,6 +281,7 @@ pub async fn list_delete_note(id: String, db: State<'_, TursoDb>) -> AppResult<(
     let conn = db.conn()?;
     conn.execute("UPDATE list_notes SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -277,6 +291,7 @@ pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<S
     let conn = db.conn()?;
     conn.execute("UPDATE list_notes SET list_id = ?1, group_id = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?5",
         libsql::params![list_id, group_id, sort_order, now, note_id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -284,10 +299,13 @@ pub async fn list_move_note(note_id: String, list_id: String, group_id: Option<S
 pub async fn list_reorder_notes(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let conn = db.conn()?;
+    let tx = conn.transaction().await?;
     for (id, order) in &items {
-        conn.execute("UPDATE list_notes SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+        tx.execute("UPDATE list_notes SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
             libsql::params![*order, now.clone(), id.clone()]).await?;
     }
+    tx.commit().await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -301,6 +319,7 @@ pub async fn list_upsert_group(group: ListNoteGroup, db: State<'_, TursoDb>) -> 
         "INSERT INTO list_note_groups (id, list_id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort_order = excluded.sort_order, updated_at = excluded.updated_at",
         libsql::params![group.id, group.list_id, group.name, group.sort_order, now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -312,6 +331,7 @@ pub async fn list_delete_group(id: String, db: State<'_, TursoDb>) -> AppResult<
         libsql::params![now.clone(), id.clone()]).await?;
     conn.execute("UPDATE list_note_groups SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -325,6 +345,7 @@ pub async fn list_upsert_template(template: ListTemplate, db: State<'_, TursoDb>
         "INSERT INTO list_templates (id, name, content, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET name = excluded.name, content = excluded.content, updated_at = excluded.updated_at",
         libsql::params![template.id, template.name, template.content, now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -334,5 +355,6 @@ pub async fn list_delete_template(id: String, db: State<'_, TursoDb>) -> AppResu
     let conn = db.conn()?;
     conn.execute("UPDATE list_templates SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id]).await?;
+    db.push_sync();
     Ok(())
 }
