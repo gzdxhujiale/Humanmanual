@@ -95,24 +95,6 @@ pub fn run() {
                     panic!("DB setup thread panicked");
                 });
 
-            if turso_db.is_replica {
-                let db_sync = turso_db.db.clone();
-                let sync_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    match db_sync.sync().await {
-                        Ok(_) => {
-                            use tauri::Emitter;
-                            let _ = sync_handle.emit("db:synced", ());
-                        }
-                        Err(e) => {
-                            eprintln!("[DB] Initial sync skipped or failed: {}", e);
-                        }
-                    }
-                });
-
-                db::start_background_sync(app.handle().clone(), turso_db.clone());
-            }
-
             app.manage(turso_db);
             let turso_state = app.state::<TursoDb>();
             let db_for_reminder = turso_state.inner().clone();

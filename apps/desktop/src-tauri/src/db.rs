@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 use tauri::Manager;
 
 use crate::error::AppResult;
@@ -14,7 +13,9 @@ use crate::error::AppResult;
 pub struct TursoDb {
     pub db: Arc<Database>,
     pub is_remote: bool,
+    #[allow(dead_code)]
     pub is_replica: bool,
+    #[allow(dead_code)]
     pub init_error: Option<String>,
 }
 
@@ -28,51 +29,17 @@ impl TursoDb {
         self.db.connect()
     }
 
-    /// Trigger a non-blocking background sync if connected as an embedded replica.
+    /// Trigger a non-blocking push (no-op in Direct Remote Mode as queries execute live over HTTP)
     pub fn push_sync(&self) {
-        if self.is_replica {
-            let db_sync = self.db.clone();
-            tauri::async_runtime::spawn(async move {
-                match db_sync.sync().await {
-                    Ok(frames) => {
-                        println!("[Turso] Push sync OK — synced frames: {:?}", frames);
-                    }
-                    Err(e) => {
-                        eprintln!("[Turso] Push sync FAILED — error: {}", e);
-                    }
-                }
-            });
-        }
+        // Direct Remote Mode executes SQL queries live on Turso Cloud over Hrana HTTP protocol.
+        // No local replica WAL push is needed.
     }
 }
 
-/// Start a periodic background sync worker that polls Turso Cloud and emits `db:synced`
-/// to the frontend whenever remote frames are pulled.
-pub fn start_background_sync(app: tauri::AppHandle, db: TursoDb) {
-    if !db.is_replica {
-        return;
-    }
-    let db_sync = db.db.clone();
-    let interval_ms = read_turso_config().sync_interval_ms.unwrap_or(5000);
-
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms.max(3000)));
-        loop {
-            interval.tick().await;
-            match db_sync.sync().await {
-                Ok(replicated) => {
-                    if replicated.frames_synced() > 0 {
-                        println!("[Turso] Background sync pulled {} frames from cloud! Emitting db:synced.", replicated.frames_synced());
-                        use tauri::Emitter;
-                        let _ = app.emit("db:synced", ());
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[Turso] Background sync error: {}", e);
-                }
-            }
-        }
-    });
+/// Start background sync worker (no-op in Direct Remote Mode)
+#[allow(dead_code)]
+pub fn start_background_sync(_app: tauri::AppHandle, _db: TursoDb) {
+    // Direct Remote Mode queries live on Turso Cloud; background polling is not required.
 }
 
 /// 平台无关的应用数据目录（setup 时由 lib.rs 注入）：
@@ -113,22 +80,11 @@ fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
     dir.join("fishworker.db")
 }
 
-fn reset_replica_files(db_path: &PathBuf) {
-    println!("[DB] Cleaning up replica database files: {:?}", db_path);
-    let _ = fs::remove_file(db_path);
-    if let Some(parent) = db_path.parent() {
-        let _ = fs::remove_file(parent.join("fishworker.db-info"));
-        let _ = fs::remove_file(parent.join("fishworker.db-shm"));
-        let _ = fs::remove_file(parent.join("fishworker.db-wal"));
-    }
-}
-
 const DEFAULT_TURSO_CONFIG: &str = include_str!("../turso.config.json");
 
-/// Establish a libsql Database connection using a clean 3-tier strategy:
-/// Tier 1: Embedded Replica (local fast DB + auto sync with Turso Cloud)
-/// Tier 2: Direct Remote Client (live query over HTTP/Hrana if replica init fails)
-/// Tier 3: Local SQLite Mode (offline fallback guarantee)
+/// Establish a libsql Database connection using Direct Remote Client Mode:
+/// Priority 1: Direct Remote Client Mode (live query over Hrana HTTP protocol, supporting Turso MVCC)
+/// Priority 2: Local SQLite Mode (offline fallback guarantee)
 pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Database, bool, bool, Option<String>), libsql::Error> {
     if let Some(parent) = get_local_db_path(app).parent() {
         init_tls_ca_certificates(parent);
@@ -143,7 +99,7 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
             let url = raw_url.trim();
             let token = raw_token.trim();
 
-            let formatted_url = if url.starts_with("libsql://") {
+            let remote_url = if url.starts_with("libsql://") {
                 url.replacen("libsql://", "https://", 1)
             } else if url.starts_with("turso://") {
                 url.replacen("turso://", "https://", 1)
@@ -153,49 +109,24 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 url.to_string()
             };
 
-            // If a plain SQLite file exists without .db-info sidecar, clear it so libSQL can build a proper replica.
-            if db_path.exists() && !db_path.parent().map_or(false, |p| p.join("fishworker.db-info").exists()) {
-                println!("[DB] Converting plain SQLite file to libSQL embedded replica...");
-                reset_replica_files(&db_path);
-            }
+            println!("[DB] Connecting to Turso Cloud (Direct Remote Mode) → {}", remote_url);
 
-            println!("[DB] Opening embedded replica → {}", formatted_url);
-            let sync_interval_secs = cfg.sync_interval_ms.unwrap_or(60_000) / 1000;
+            match Builder::new_remote(remote_url.clone(), token.to_string()).build().await {
+                Ok(remote_db) => {
+                    println!("[DB] Connected to Turso Cloud successfully (Hrana HTTP protocol).");
+                    Ok((remote_db, true, false, None))
+                }
+                Err(remote_err) => {
+                    let err_str = remote_err.to_string();
+                    eprintln!("[DB] Direct remote client init error: {}. Fallbacking to local SQLite mode.", err_str);
 
-            // Tier 1: Embedded Remote Replica
-            let replica_res = Builder::new_remote_replica(db_path_str.clone(), formatted_url.clone(), token.to_string())
-                .sync_interval(Duration::from_secs(sync_interval_secs.max(10)))
-                .build()
-                .await;
-
-            match replica_res {
-                Ok(db) => Ok((db, true, true, None)),
-                Err(replica_err) => {
-                    let err_str = replica_err.to_string();
-                    eprintln!("[DB] Embedded replica init error: {}. Fallbacking to direct remote mode...", err_str);
-                    if err_str.contains("file is not a database") || err_str.contains("corrupt") {
-                        reset_replica_files(&db_path);
-                    }
-
-                    // Tier 2: Direct Remote Client Mode
-                    match Builder::new_remote(formatted_url.clone(), token.to_string()).build().await {
-                        Ok(remote_db) => {
-                            println!("[DB] Connected using direct remote Turso client mode.");
-                            Ok((remote_db, true, false, Some(format!("DirectRemoteFallback: {}", err_str))))
-                        }
-                        Err(remote_err) => {
-                            eprintln!("[DB] Direct remote client init error: {}. Fallbacking to local SQLite mode.", remote_err);
-
-                            // Tier 3: Local SQLite Mode Fallback
-                            let local_db = Builder::new_local(db_path_str).build().await?;
-                            Ok((local_db, false, false, Some(format!("ReplicaErr: {}; RemoteErr: {}", err_str, remote_err))))
-                        }
-                    }
+                    let local_db = Builder::new_local(db_path_str).build().await?;
+                    Ok((local_db, false, false, Some(format!("RemoteErr: {}", err_str))))
                 }
             }
         }
         _ => {
-            println!("[DB] No valid Turso config found — opening local SQLite only.");
+            println!("[DB] No valid Turso config found — opening local SQLite mode.");
             let local_db = Builder::new_local(db_path_str).build().await?;
             Ok((local_db, false, false, None))
         }
@@ -277,7 +208,10 @@ pub async fn db_get_preference(key: String, db: tauri::State<'_, TursoDb>) -> Ap
         .query("SELECT pref_value FROM app_preferences WHERE pref_key = ?1", libsql::params![key])
         .await?;
     if let Ok(Some(row)) = rows.next().await {
-        let val: String = row.get(0).unwrap_or_default();
+        let val: String = match row.get_value(0) {
+            Ok(libsql::Value::Text(s)) => s,
+            _ => String::new(),
+        };
         return Ok(Some(val));
     }
     Ok(None)
@@ -299,33 +233,12 @@ pub async fn db_set_preference(
     Ok(())
 }
 
-/// Manually trigger a Turso cloud sync (pull latest from primary).
+/// Manually trigger a Turso cloud sync status query.
 #[tauri::command]
-pub async fn db_sync_now(app: tauri::AppHandle, db: tauri::State<'_, TursoDb>) -> AppResult<String> {
-    if !db.is_replica {
-        if db.is_remote {
-            return Ok("sync_ok: 当前为云端直连模式（即时在线读写，无需离线同步文件）".to_string());
-        } else {
-            return Ok("sync_error: 当前处于纯本地 SQLite 模式".to_string());
-        }
-    }
-    match db.db.sync().await {
-        Ok(_) => {
-            use tauri::Emitter;
-            let _ = app.emit("db:synced", ());
-            Ok("sync_ok".to_string())
-        }
-        Err(e) => {
-            let err_msg = e.to_string();
-            if err_msg.contains("opened in File mode") {
-                let detail = db.init_error.as_deref().unwrap_or("未知初始化错误");
-                Ok(format!(
-                    "sync_error: 无法建立云端副本 ({})",
-                    detail
-                ))
-            } else {
-                Ok(format!("sync_error: {}", err_msg))
-            }
-        }
+pub async fn db_sync_now(_app: tauri::AppHandle, db: tauri::State<'_, TursoDb>) -> AppResult<String> {
+    if db.is_remote {
+        Ok("sync_ok: 当前为云端直连模式（即时在线读写，数据实时在线同步）".to_string())
+    } else {
+        Ok("sync_error: 当前处于纯本地 SQLite 模式".to_string())
     }
 }
