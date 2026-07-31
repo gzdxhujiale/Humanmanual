@@ -5,6 +5,13 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::db::TursoDb;
 
+/// 启动后首次扫描前的延迟（等待 DB 初始化完成）
+const STARTUP_DELAY_SECS: u64 = 5;
+/// 扫描间隔：分钟级提醒精度下 15 秒足够，且对云端直连友好
+const SCAN_INTERVAL_SECS: u64 = 15;
+/// 已触发记录保留天数，超期清理
+const FIRED_RETENTION_DAYS: i64 = 14;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskReminderConfig {
     pub offset_days: i64,
@@ -146,14 +153,18 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
             continue;
         }
 
-        let key = format!("{}@{}:{}", id, today_str, r.offset_days);
+        // 去重键包含提醒时间：当天修改提醒时间后可按新时间重新触发
+        let key = format!("{}@{}:{}@{}", id, today_str, r.offset_days, r.time);
 
         let mut fired_rows = match conn.query(
             "SELECT 1 FROM task_reminder_fired WHERE key = ?1",
             libsql::params![key.clone()],
         ).await {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("[ReminderScheduler] fired-key query error for task '{}': {}", id, e);
+                continue;
+            }
         };
 
         if let Ok(Some(_)) = fired_rows.next().await {
@@ -161,10 +172,13 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
         }
 
         let now_ms = now_local.timestamp_millis();
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO task_reminder_fired (key, fired_at) VALUES (?1, ?2)",
             libsql::params![key, now_ms],
-        ).await;
+        ).await {
+            eprintln!("[ReminderScheduler] failed to record fired key for task '{}': {}", id, e);
+            continue; // 未能记录去重键则不发通知，避免下轮重复轰炸
+        }
 
         let days_left = (target_date - today).num_days();
         let body = build_deadline_body(&title, target_date, deadline, days_left);
@@ -183,18 +197,20 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
         }
     }
 
-    let cutoff = (now_local - chrono::Duration::days(14)).timestamp_millis();
-    let _ = conn.execute(
+    let cutoff = (now_local - chrono::Duration::days(FIRED_RETENTION_DAYS)).timestamp_millis();
+    if let Err(e) = conn.execute(
         "DELETE FROM task_reminder_fired WHERE fired_at < ?1",
         libsql::params![cutoff],
-    ).await;
+    ).await {
+        eprintln!("[ReminderScheduler] retention cleanup error: {}", e);
+    }
 }
 
 pub fn start_reminder_scheduler(app_handle: AppHandle, turso: TursoDb) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(STARTUP_DELAY_SECS)).await;
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(SCAN_INTERVAL_SECS));
         loop {
             interval.tick().await;
             check_and_send_reminders(&app_handle, &turso).await;

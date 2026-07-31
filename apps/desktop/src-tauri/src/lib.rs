@@ -8,6 +8,7 @@ mod list;
 mod mission;
 mod pomodoro;
 mod reminder_scheduler;
+mod repo;
 mod schema;
 mod sync;
 mod time_management;

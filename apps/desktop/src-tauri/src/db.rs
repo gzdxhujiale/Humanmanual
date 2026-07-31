@@ -15,7 +15,6 @@ pub struct TursoDb {
     pub is_remote: bool,
     #[allow(dead_code)]
     pub is_replica: bool,
-    #[allow(dead_code)]
     pub init_error: Option<String>,
 }
 
@@ -28,18 +27,6 @@ impl TursoDb {
     pub fn conn(&self) -> Result<libsql::Connection, libsql::Error> {
         self.db.connect()
     }
-
-    /// Trigger a non-blocking push (no-op in Direct Remote Mode as queries execute live over HTTP)
-    pub fn push_sync(&self) {
-        // Direct Remote Mode executes SQL queries live on Turso Cloud over Hrana HTTP protocol.
-        // No local replica WAL push is needed.
-    }
-}
-
-/// Start background sync worker (no-op in Direct Remote Mode)
-#[allow(dead_code)]
-pub fn start_background_sync(_app: tauri::AppHandle, _db: TursoDb) {
-    // Direct Remote Mode queries live on Turso Cloud; background polling is not required.
 }
 
 /// 平台无关的应用数据目录（setup 时由 lib.rs 注入）：
@@ -229,16 +216,25 @@ pub async fn db_set_preference(
         libsql::params![key, value],
     )
     .await?;
-    db.push_sync();
     Ok(())
 }
 
-/// Manually trigger a Turso cloud sync status query.
+/// 同步状态结构化返回：文案由前端根据 mode/ok/initError 自行拼装
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    /// "remote" = 云端直连（实时在线读写）；"local" = 纯本地 SQLite 降级模式
+    pub mode: String,
+    pub ok: bool,
+    pub init_error: Option<String>,
+}
+
+/// Query the current Turso connection status.
 #[tauri::command]
-pub async fn db_sync_now(_app: tauri::AppHandle, db: tauri::State<'_, TursoDb>) -> AppResult<String> {
-    if db.is_remote {
-        Ok("sync_ok: 当前为云端直连模式（即时在线读写，数据实时在线同步）".to_string())
-    } else {
-        Ok("sync_error: 当前处于纯本地 SQLite 模式".to_string())
-    }
+pub async fn db_sync_now(_app: tauri::AppHandle, db: tauri::State<'_, TursoDb>) -> AppResult<SyncStatus> {
+    Ok(SyncStatus {
+        mode: if db.is_remote { "remote".into() } else { "local".into() },
+        ok: db.is_remote,
+        init_error: db.init_error.clone(),
+    })
 }

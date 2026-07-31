@@ -4,7 +4,7 @@ export type TimeScope = "short" | "medium" | "long" | "ongoing";
 export interface MissionStatement {
   id: string;
   content: string;
-  updatedAt: string;
+  updatedAt: number;
 }
 
 export interface MissionRole {
@@ -12,8 +12,8 @@ export interface MissionRole {
   name: string;
   icon: string;
   sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type Role = MissionRole;
@@ -27,8 +27,8 @@ export interface Goal {
   startDate: string | null;
   endDate: string | null;
   sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MissionAllData {

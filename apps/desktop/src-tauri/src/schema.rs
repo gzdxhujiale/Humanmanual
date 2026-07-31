@@ -82,5 +82,30 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
         )
         .await;
 
+    // 存储层时间戳统一迁移：将历史 ISO 文本（"YYYY-MM-DD HH:MM:SS.mmm"，UTC）
+    // 一次性转为 UNIX 毫秒整数；纯数字文本直接 CAST。条件 typeof(...)='text'
+    // 保证幂等：迁移后列均为 integer，重复执行即空操作。
+    for (table, col) in [
+        ("daily_reviews", "created_at"),
+        ("daily_reviews", "updated_at"),
+        ("mission_roles", "created_at"),
+        ("mission_roles", "updated_at"),
+        ("mission_goals", "created_at"),
+        ("mission_goals", "updated_at"),
+        ("mission_statement", "updated_at"),
+        ("list_notes", "created_at"),
+        ("list_notes", "updated_at"),
+    ] {
+        let sql = format!(
+            "UPDATE {table} SET {col} = CASE \
+                WHEN {col} LIKE '____-__-__%' THEN CAST(strftime('%s', {col}) AS INTEGER) * 1000 + CAST(substr({col}, 21, 3) AS INTEGER) \
+                ELSE CAST({col} AS INTEGER) \
+            END WHERE typeof({col}) = 'text' AND {col} != ''"
+        );
+        if let Err(e) = conn.execute(&sql, ()).await {
+            eprintln!("[Schema] ms-migration failed for {table}.{col}: {e}");
+        }
+    }
+
     Ok(())
 }

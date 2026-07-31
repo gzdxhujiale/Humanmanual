@@ -31,13 +31,13 @@ export function DatabaseSettingsPanel() {
     setSyncing(true);
     setMessage("");
     try {
-      const res: string = await call("db_sync_now");
-      if (res.startsWith("sync_ok")) {
-        setMessage("同步成功！已与 Turso 云端完成数据双向同步。");
-      } else if (res.startsWith("sync_error:")) {
-        setMessage("同步失败: " + res.replace("sync_error:", "").trim());
+      const res = await call<{ mode: "remote" | "local"; ok: boolean; initError: string | null }>("db_sync_now");
+      if (res.ok) {
+        setMessage("已直连 Turso 云端，读写实时生效，无需手动同步。");
+      } else if (res.initError) {
+        setMessage("云端连接失败：" + res.initError + "（当前使用本地数据库）");
       } else {
-        setMessage(res);
+        setMessage("当前为本地数据库模式，未配置 Turso 云端连接。");
       }
     } catch (err: any) {
       setMessage("同步过程出错：" + (err?.message || err));

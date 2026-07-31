@@ -9,7 +9,6 @@
     "core:event:default",
     "core:window:default",
     "core:webview:default",
-    "core:window:allow-create",
     "core:webview:allow-create-webview-window",
     "core:window:allow-set-focus",
     "opener:default",
@@ -23,7 +22,7 @@
     "core:window:allow-hide",
     "core:window:allow-set-position",
     "core:window:allow-close",
-    "core:window:allow-maximize",
+    "core:window:allow-toggle-maximize",
     "core:window:allow-set-always-on-top",
     "core:window:allow-is-always-on-top"
   ]

@@ -3,6 +3,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::AppResult;
+use crate::repo::with_txn;
 use crate::sync::now_iso;
 use crate::db::TursoDb;
 
@@ -65,48 +66,53 @@ pub struct HabitData {
 pub async fn habit_load_all(db: State<'_, TursoDb>) -> AppResult<HabitData> {
     let conn = db.conn()?;
 
-    let mut habits_rows = conn.query(
-        "SELECT id, name, frequency, goal, start_date, duration, category, reminder, auto_popup_log, created_at, updated_at FROM habits WHERE deleted_at IS NULL ORDER BY created_at ASC",
+    // 单次 LEFT JOIN 往返同时取回习惯与打卡，避免两次远程查询；
+    // 习惯字段在多条打卡行上重复，按 id 去重收集。
+    let mut rows = conn.query(
+        "SELECT h.id, h.name, h.frequency, h.goal, h.start_date, h.duration, h.category, h.reminder, h.auto_popup_log, h.created_at, h.updated_at, \
+                c.id, c.date, c.completed, c.created_at, c.updated_at \
+         FROM habits h \
+         LEFT JOIN habit_checkins c ON c.habit_id = h.id AND c.deleted_at IS NULL \
+         WHERE h.deleted_at IS NULL \
+         ORDER BY h.created_at ASC",
         (),
     ).await?;
 
     let mut habits = Vec::new();
-    while let Ok(Some(row)) = habits_rows.next().await {
-        let auto_popup_log_i32: i32 = row.get(8).unwrap_or(0);
-        let reminder: Option<String> = row.get(7).ok();
-        habits.push(Habit {
-            id: row.get(0).unwrap_or_default(),
-            name: row.get(1).unwrap_or_default(),
-            frequency: row.get(2).ok(),
-            goal: row.get(3).ok(),
-            start_date: row.get(4).ok(),
-            duration: row.get(5).ok(),
-            group: row.get(6).ok(),
-            check_in_time: reminder.clone(),
-            reminder,
-            auto_popup_log: auto_popup_log_i32 != 0,
-            created_at: row.get(9).unwrap_or_default(),
-            updated_at: row.get(10).unwrap_or_default(),
-        });
-    }
-    drop(habits_rows);
-
-    let mut checkins_rows = conn.query(
-        "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL",
-        (),
-    ).await?;
-
     let mut check_ins = Vec::new();
-    while let Ok(Some(row)) = checkins_rows.next().await {
-        let completed: i32 = row.get(3).unwrap_or(0);
-        check_ins.push(HabitCheckIn {
-            id: row.get(0).unwrap_or_default(),
-            habit_id: row.get(1).unwrap_or_default(),
-            date: row.get(2).unwrap_or_default(),
-            completed: completed != 0,
-            created_at: row.get(4).unwrap_or_default(),
-            updated_at: row.get(5).unwrap_or_default(),
-        });
+    let mut seen = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await? {
+        let habit_id: String = row.get(0)?;
+        if seen.insert(habit_id.clone()) {
+            let auto_popup_log_i32: i32 = row.get(8).unwrap_or(0);
+            let reminder: Option<String> = row.get(7).ok();
+            habits.push(Habit {
+                id: habit_id.clone(),
+                name: row.get(1).unwrap_or_default(),
+                frequency: row.get(2).ok(),
+                goal: row.get(3).ok(),
+                start_date: row.get(4).ok(),
+                duration: row.get(5).ok(),
+                group: row.get(6).ok(),
+                check_in_time: reminder.clone(),
+                reminder,
+                auto_popup_log: auto_popup_log_i32 != 0,
+                created_at: row.get(9).unwrap_or_default(),
+                updated_at: row.get(10).unwrap_or_default(),
+            });
+        }
+        // LEFT JOIN 无打卡时 c.* 为 NULL，跳过
+        if let Ok(checkin_id) = row.get::<String>(11) {
+            let completed: i32 = row.get(13).unwrap_or(0);
+            check_ins.push(HabitCheckIn {
+                id: checkin_id,
+                habit_id,
+                date: row.get(12).unwrap_or_default(),
+                completed: completed != 0,
+                created_at: row.get(14).unwrap_or_default(),
+                updated_at: row.get(15).unwrap_or_default(),
+            });
+        }
     }
 
     Ok(HabitData { habits, check_ins })
@@ -128,7 +134,6 @@ pub async fn habit_create(payload: HabitPayload, db: State<'_, TursoDb>) -> AppR
         libsql::params![id.clone(), name_val.clone(), payload.frequency.clone(), payload.goal.clone(), start_date_val.clone(), payload.duration.clone(), payload.group.clone(), reminder_val.clone(), auto_popup_log_val, now.clone(), now.clone()],
     ).await?;
 
-    db.push_sync();
     Ok(Habit {
         id,
         name: name_val,
@@ -157,7 +162,6 @@ pub async fn habit_update(id: String, payload: HabitPayload, db: State<'_, Turso
         libsql::params![payload.name, payload.frequency, payload.goal, payload.start_date, payload.duration, payload.group, reminder_val, auto_popup_log_val, now, id],
     ).await?;
 
-    db.push_sync();
     Ok(())
 }
 
@@ -165,16 +169,18 @@ pub async fn habit_update(id: String, payload: HabitPayload, db: State<'_, Turso
 pub async fn habit_delete(id: String, db: State<'_, TursoDb>) -> AppResult<()> {
     let now = now_iso();
     let conn = db.conn()?;
-    conn.execute(
-        "UPDATE habit_checkins SET deleted_at = ?1, updated_at = ?2 WHERE habit_id = ?3",
-        libsql::params![now.clone(), now.clone(), id.clone()],
-    ).await?;
-    conn.execute(
-        "UPDATE habits SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
-        libsql::params![now.clone(), now, id],
-    ).await?;
+    with_txn(&conn, |tx| Box::pin(async move {
+        tx.execute(
+            "UPDATE habit_checkins SET deleted_at = ?1, updated_at = ?2 WHERE habit_id = ?3",
+            libsql::params![now.clone(), now.clone(), id.clone()],
+        ).await?;
+        tx.execute(
+            "UPDATE habits SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
+            libsql::params![now.clone(), now, id],
+        ).await?;
+        Ok(())
+    })).await?;
 
-    db.push_sync();
     Ok(())
 }
 
@@ -190,29 +196,25 @@ pub async fn habit_toggle_checkin(
     let checkin_id = Uuid::new_v4().to_string();
 
     let conn = db.conn()?;
-    conn.execute(
-        "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at, deleted_at = NULL",
+    // 单条 upsert + RETURNING：直连云端下省一次写后读往返，且返回值必来自本次写入的行
+    let mut rows = conn.query(
+        "INSERT INTO habit_checkins (id, habit_id, date, completed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(habit_id, date) DO UPDATE SET completed = excluded.completed, updated_at = excluded.updated_at, deleted_at = NULL \
+         RETURNING id, completed, created_at, updated_at",
         libsql::params![checkin_id, habit_id.clone(), date.clone(), completed_val, now.clone(), now.clone()],
     ).await?;
 
-    let mut row_q = conn.query(
-        "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL AND habit_id = ?1 AND date = ?2",
-        libsql::params![habit_id.clone(), date.clone()],
-    ).await?;
-
-    db.push_sync();
-
-    if let Ok(Some(row)) = row_q.next().await {
-        let final_completed: i32 = row.get(3).unwrap_or(0);
+    if let Some(row) = rows.next().await? {
+        let final_completed: i32 = row.get(1).unwrap_or(0);
         return Ok(HabitCheckIn {
-            id: row.get(0).unwrap_or_default(),
+            id: row.get(0)?,
             habit_id,
             date,
             completed: final_completed != 0,
-            created_at: row.get(4).unwrap_or_default(),
-            updated_at: row.get(5).unwrap_or_default(),
+            created_at: row.get(2).unwrap_or_default(),
+            updated_at: row.get(3).unwrap_or_default(),
         });
     }
 
-    Err(crate::error::AppError("habit_toggle_checkin: row not found after upsert".into()))
+    Err(crate::error::AppError::NotFound("habit_toggle_checkin: upsert returned no row".into()))
 }
