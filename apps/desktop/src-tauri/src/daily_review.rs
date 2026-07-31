@@ -79,6 +79,7 @@ pub async fn daily_review_save(review: DailyReviewRow, db: State<'_, TursoDb>) -
     )
     .await?;
 
+    db.push_sync();
     Ok(())
 }
 
@@ -92,5 +93,6 @@ pub async fn daily_review_delete(id: String, db: State<'_, TursoDb>) -> AppResul
     )
     .await?;
 
+    db.push_sync();
     Ok(())
 }

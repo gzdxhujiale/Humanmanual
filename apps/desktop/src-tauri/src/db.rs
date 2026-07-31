@@ -32,12 +32,46 @@ impl TursoDb {
         if self.is_remote {
             let db_sync = self.db.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = db_sync.sync().await {
-                    eprintln!("[DB] Push sync error: {}", e);
+                match db_sync.sync().await {
+                    Ok(frames) => {
+                        println!("[Turso] Push sync OK — synced frames: {:?}", frames);
+                    }
+                    Err(e) => {
+                        eprintln!("[Turso] Push sync FAILED — error: {}", e);
+                    }
                 }
             });
         }
     }
+}
+
+/// Start a periodic background sync worker that polls Turso Cloud and emits `db:synced`
+/// to the frontend whenever remote frames are pulled.
+pub fn start_background_sync(app: tauri::AppHandle, db: TursoDb) {
+    if !db.is_remote {
+        return;
+    }
+    let db_sync = db.db.clone();
+    let interval_ms = read_turso_config().sync_interval_ms.unwrap_or(5000);
+
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms.max(3000)));
+        loop {
+            interval.tick().await;
+            match db_sync.sync().await {
+                Ok(replicated) => {
+                    if replicated.frames_synced() > 0 {
+                        println!("[Turso] Background sync pulled {} frames from cloud! Emitting db:synced.", replicated.frames_synced());
+                        use tauri::Emitter;
+                        let _ = app.emit("db:synced", ());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[Turso] Background sync error: {}", e);
+                }
+            }
+        }
+    });
 }
 
 /// 平台无关的应用数据目录（setup 时由 lib.rs 注入）：
@@ -78,6 +112,61 @@ fn get_local_db_path(app: &tauri::AppHandle) -> PathBuf {
     dir.join("fishworker.db")
 }
 
+fn is_valid_sqlite_file(db_path: &PathBuf) -> bool {
+    if !db_path.exists() {
+        return true;
+    }
+    if let Ok(metadata) = fs::metadata(db_path) {
+        if metadata.len() < 100 {
+            return false;
+        }
+    }
+    if let Ok(mut file) = fs::File::open(db_path) {
+        use std::io::Read;
+        let mut header = [0u8; 16];
+        if file.read_exact(&mut header).is_ok() {
+            return &header == b"SQLite format 3\0";
+        }
+    }
+    false
+}
+
+fn reset_replica_files(db_path: &PathBuf) {
+    println!("[DB] Resetting replica db file and sidecar metadata: {:?}", db_path);
+    let _ = fs::remove_file(db_path);
+    if let Some(parent) = db_path.parent() {
+        let _ = fs::remove_file(parent.join("fishworker.db-info"));
+        let _ = fs::remove_file(parent.join("fishworker.db-shm"));
+        let _ = fs::remove_file(parent.join("fishworker.db-wal"));
+    }
+}
+
+fn check_and_reset_replica_if_url_changed(db_path: &PathBuf, current_url: &str) {
+    if let Some(parent) = db_path.parent() {
+        let marker_path = parent.join("last_turso_url.txt");
+        let old_url = fs::read_to_string(&marker_path).unwrap_or_default();
+        let info_path = parent.join("fishworker.db-info");
+        
+        let url_changed = !old_url.is_empty() && old_url.trim() != current_url.trim();
+        let file_corrupted = !is_valid_sqlite_file(db_path);
+        // Only treat missing db-info as "invalid state" if the file is also corrupt.
+        // A valid SQLite file without a db-info sidecar is fine for local-mode fallback.
+        let invalid_state = db_path.exists() && !info_path.exists() && file_corrupted;
+
+        if url_changed || invalid_state || file_corrupted {
+            if url_changed {
+                println!("[DB] Turso URL changed from '{}' to '{}'. Resetting replica...", old_url.trim(), current_url.trim());
+            } else if invalid_state {
+                println!("[DB] Invalid replica state detected (db exists but db-info does not). Resetting replica...");
+            } else if file_corrupted {
+                println!("[DB] Corrupted or invalid SQLite file detected ({:?}). Resetting replica...", db_path);
+            }
+            reset_replica_files(db_path);
+        }
+        let _ = fs::write(marker_path, current_url.trim());
+    }
+}
+
 const DEFAULT_TURSO_CONFIG: &str = include_str!("../turso.config.json");
 
 /// Establish a libsql Database connection.
@@ -101,6 +190,9 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
 
             if url.is_empty() || token.is_empty() {
                 println!("[DB] Turso URL or Token is empty — opening local SQLite only.");
+                if !is_valid_sqlite_file(&db_path) {
+                    reset_replica_files(&db_path);
+                }
                 return Builder::new_local(db_path_str).build().await.map(|db| (db, false, None));
             }
 
@@ -114,6 +206,8 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 url.to_string()
             };
 
+            check_and_reset_replica_if_url_changed(&db_path, &formatted_url);
+
             println!("[DB] Opening embedded replica → {}", formatted_url);
             let sync_interval_secs = cfg.sync_interval_ms.unwrap_or(60_000) / 1000;
 
@@ -121,23 +215,38 @@ pub async fn establish_local_connection(app: &tauri::AppHandle) -> Result<(Datab
                 .sync_interval(Duration::from_secs(sync_interval_secs.max(10)))
                 .build();
 
-            // Add 1200ms timeout to prevent network latency to Turso Cloud from blocking app startup
-            match tokio::time::timeout(Duration::from_millis(1200), replica_fut).await {
+            // Add timeout: fallback to local SQLite if remote connection times out or fails
+            match tokio::time::timeout(Duration::from_millis(5000), replica_fut).await {
                 Ok(Ok(db)) => Ok((db, true, None)),
                 Ok(Err(e)) => {
                     let err_str = e.to_string();
-                    eprintln!("[DB] Remote replica init error: {}. Fallbacking immediately to local SQLite mode.", err_str);
-                    Builder::new_local(db_path_str)
-                        .build()
-                        .await
-                        .map(|db| (db, false, Some(format!("ReplicaInitError: {}", err_str))))
+                    eprintln!("[DB] Remote replica init error: {}. Fallbacking to local SQLite mode.", err_str);
+                    let local_db = Builder::new_local(db_path_str.clone()).build().await;
+                    match local_db {
+                        Ok(db) => Ok((db, false, Some(format!("ReplicaInitError: {}", err_str)))),
+                        Err(e2) => {
+                            eprintln!("[DB] Local SQLite open error after fallback: {}. Purging corrupted file and retrying.", e2);
+                            reset_replica_files(&db_path);
+                            Builder::new_local(db_path_str)
+                                .build()
+                                .await
+                                .map(|db| (db, false, Some(format!("ReplicaInitError: {}", err_str))))
+                        }
+                    }
                 }
                 Err(_) => {
-                    eprintln!("[DB] Turso Cloud connection timed out (1200ms limit reached). Fallbacking immediately to local SQLite mode.");
-                    Builder::new_local(db_path_str)
-                        .build()
-                        .await
-                        .map(|db| (db, false, Some("Connection to Turso Cloud timed out during startup".to_string())))
+                    eprintln!("[DB] Turso Cloud connection timed out (5000ms limit reached). Fallbacking to local SQLite mode.");
+                    let local_db = Builder::new_local(db_path_str.clone()).build().await;
+                    match local_db {
+                        Ok(db) => Ok((db, false, Some("Connection to Turso Cloud timed out during startup".to_string()))),
+                        Err(_) => {
+                            reset_replica_files(&db_path);
+                            Builder::new_local(db_path_str)
+                                .build()
+                                .await
+                                .map(|db| (db, false, Some("Connection to Turso Cloud timed out during startup".to_string())))
+                        }
+                    }
                 }
             }
         }
@@ -196,6 +305,13 @@ pub fn read_turso_config() -> TursoConfigJson {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(config) = serde_json::from_str::<TursoConfigJson>(&content) {
                     if config.url.as_deref().map_or(false, |u| !u.is_empty()) {
+                        if config.url.as_deref().map_or(false, |u| u.contains("humanmanual-gzdxhujiale")) {
+                            println!("[DB] Found obsolete humanmanual URL in turso.config.json. Migrating to human URL...");
+                            if let Ok(default_cfg) = serde_json::from_str::<TursoConfigJson>(DEFAULT_TURSO_CONFIG) {
+                                let _ = fs::write(&path, DEFAULT_TURSO_CONFIG);
+                                return default_cfg;
+                            }
+                        }
                         return config;
                     }
                 }

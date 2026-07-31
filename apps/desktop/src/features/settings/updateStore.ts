@@ -154,7 +154,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
       try {
         const resp = await fetch(githubUrl, {
-          headers: { 'Accept': 'application/vnd.github.v3+json' }
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'HumanManual-App'
+          }
         });
 
         if (resp.ok) {

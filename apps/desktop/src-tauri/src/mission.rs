@@ -120,6 +120,7 @@ pub async fn mission_save_statement(content: String, db: State<'_, TursoDb>) -> 
         "INSERT INTO mission_statement (id, content, updated_at) VALUES ('default', ?1, ?2) ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
         libsql::params![content.clone(), now_str.clone()],
     ).await?;
+    db.push_sync();
     Ok(MissionStatement { id: "default".into(), content, updated_at: now_str })
 }
 
@@ -134,6 +135,7 @@ pub async fn mission_create_role(name: String, icon: String, sort_order: i32, db
         "INSERT INTO mission_roles (id, name, icon, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         libsql::params![id.clone(), name.clone(), icon.clone(), sort_order, now_str.clone(), now_str.clone()],
     ).await?;
+    db.push_sync();
     Ok(Role { id, name, icon, sort_order, created_at: now_str.clone(), updated_at: now_str })
 }
 
@@ -145,6 +147,7 @@ pub async fn mission_update_role(id: String, name: String, icon: String, db: Sta
         "UPDATE mission_roles SET name = ?1, icon = ?2, updated_at = ?3 WHERE id = ?4",
         libsql::params![name, icon, now_str, id],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -158,6 +161,7 @@ pub async fn mission_delete_role(id: String, db: State<'_, TursoDb>) -> AppResul
         libsql::params![id.clone()]).await?;
     conn.execute("UPDATE mission_roles SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id]).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -165,12 +169,15 @@ pub async fn mission_delete_role(id: String, db: State<'_, TursoDb>) -> AppResul
 pub async fn mission_reorder_roles(items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now_str = now_iso();
     let conn = db.conn()?;
+    let tx = conn.transaction().await?;
     for (id, order) in &items {
-        conn.execute(
+        tx.execute(
             "UPDATE mission_roles SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
             libsql::params![*order, now_str.clone(), id.clone()],
         ).await?;
     }
+    tx.commit().await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -185,6 +192,7 @@ pub async fn mission_create_goal(role_id: String, title: String, sort_order: i32
         "INSERT INTO mission_goals (id, role_id, title, status, time_scope, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, 'not_started', 'long', ?4, ?5, ?6)",
         libsql::params![id.clone(), role_id.clone(), title.clone(), sort_order, now_str.clone(), now_str.clone()],
     ).await?;
+    db.push_sync();
     Ok(Goal {
         id, role_id, title,
         status: "not_started".into(),
@@ -206,26 +214,13 @@ pub async fn mission_update_goal(
     db: State<'_, TursoDb>,
 ) -> AppResult<()> {
     let now_str = now_iso();
-    let mut sets = Vec::new();
-
-    if title.is_some() { sets.push("title = ?"); }
-    if status.is_some() { sets.push("status = ?"); }
-    if time_scope.is_some() { sets.push("time_scope = ?"); }
-    sets.push("start_date = ?");
-    sets.push("end_date = ?");
-    sets.push("updated_at = ?");
-
-    let sql = format!("UPDATE mission_goals SET {} WHERE id = ?", sets.join(", "));
-    let conn = db.conn()?;
-
-    // Build params dynamically using execute with individual binds is not straightforward in libsql.
-    // We use a fixed-param approach covering all optional fields:
     let sql_fixed = "UPDATE mission_goals SET title = COALESCE(?1, title), status = COALESCE(?2, status), time_scope = COALESCE(?3, time_scope), start_date = ?4, end_date = ?5, updated_at = ?6 WHERE id = ?7";
-    let _ = sql; // suppress unused warning
+    let conn = db.conn()?;
     conn.execute(
         sql_fixed,
         libsql::params![title, status, time_scope, start_date, end_date, now_str, id],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -237,6 +232,7 @@ pub async fn mission_delete_goal(id: String, db: State<'_, TursoDb>) -> AppResul
         "UPDATE mission_goals SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -244,11 +240,14 @@ pub async fn mission_delete_goal(id: String, db: State<'_, TursoDb>) -> AppResul
 pub async fn mission_reorder_goals(role_id: String, items: Vec<(String, i32)>, db: State<'_, TursoDb>) -> AppResult<()> {
     let now_str = now_iso();
     let conn = db.conn()?;
+    let tx = conn.transaction().await?;
     for (id, order) in &items {
-        conn.execute(
+        tx.execute(
             "UPDATE mission_goals SET sort_order = ?1, updated_at = ?2 WHERE id = ?3 AND role_id = ?4",
             libsql::params![*order, now_str.clone(), id.clone(), role_id.clone()],
         ).await?;
     }
+    tx.commit().await?;
+    db.push_sync();
     Ok(())
 }

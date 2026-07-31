@@ -76,6 +76,7 @@ export interface TaskDraft {
   title: string;
   description?: string;
   deadline?: number;
+  scheduledDate?: string;
   reminder?: string;
 }
 
@@ -160,7 +161,14 @@ export const TaskQuickEditPopover = memo(forwardRef<TaskQuickEditHandle, TaskQui
     setDateSel(nextDate);
     setTimeSel(nextTime);
     if (task && onSave) {
-      onSave(task.id, { deadline: nextDate ? composeDeadline(nextDate, nextTime) : undefined }, false);
+      onSave(
+        task.id,
+        {
+          deadline: nextDate ? composeDeadline(nextDate, nextTime) : undefined,
+          scheduledDate: nextDate || undefined,
+        },
+        false
+      );
     }
   };
 
@@ -203,6 +211,7 @@ export const TaskQuickEditPopover = memo(forwardRef<TaskQuickEditHandle, TaskQui
       title: t,
       description: isDescEmpty ? undefined : latestDescription.current,
       deadline: d ? composeDeadline(d, tm) : undefined,
+      scheduledDate: d || undefined,
       reminder: r ? serializeReminder(r) : undefined,
     });
   };

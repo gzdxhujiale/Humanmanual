@@ -125,6 +125,7 @@ pub async fn pomodoro_upsert_record(record: PomodoroRecord, db: State<'_, TursoD
         "INSERT INTO pomodoro_records (id, mode, phase, start_time, end_time, duration_minutes, date, date_label, time_range_label, task_id, linked_target, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT(id) DO UPDATE SET mode = excluded.mode, phase = excluded.phase, start_time = excluded.start_time, end_time = excluded.end_time, duration_minutes = excluded.duration_minutes, date = excluded.date, date_label = excluded.date_label, time_range_label = excluded.time_range_label, task_id = excluded.task_id, linked_target = excluded.linked_target, updated_at = excluded.updated_at",
         libsql::params![record.id, record.mode, record.phase, record.start_time, record.end_time, record.duration_minutes, record.date, record.date_label, record.time_range_label, record.task_id, linked_target_json, record.created_at, now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -136,6 +137,7 @@ pub async fn pomodoro_delete_record(id: String, db: State<'_, TursoDb>) -> AppRe
         "UPDATE pomodoro_records SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -147,6 +149,7 @@ pub async fn pomodoro_clear_all_records(db: State<'_, TursoDb>) -> AppResult<()>
         "UPDATE pomodoro_records SET deleted_at = ?1, updated_at = ?2 WHERE deleted_at IS NULL",
         libsql::params![now.clone(), now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -160,6 +163,7 @@ pub async fn pomodoro_upsert_favorite(task: FavoriteFocusTask, db: State<'_, Tur
         "INSERT INTO pomodoro_favorites (id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, mode = excluded.mode, duration_minutes = excluded.duration_minutes, accumulated_minutes = excluded.accumulated_minutes, linked_target = excluded.linked_target, is_archived = excluded.is_archived, updated_at = excluded.updated_at",
         libsql::params![task.id, task.name, task.icon, task.mode, task.duration_minutes, task.accumulated_minutes, linked_target_json, is_archived_val, task.created_at, now],
     ).await?;
+    db.push_sync();
     Ok(())
 }
 
@@ -171,5 +175,6 @@ pub async fn pomodoro_delete_favorite(id: String, db: State<'_, TursoDb>) -> App
         "UPDATE pomodoro_favorites SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3",
         libsql::params![now.clone(), now, id],
     ).await?;
+    db.push_sync();
     Ok(())
 }

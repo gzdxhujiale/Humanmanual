@@ -111,6 +111,8 @@ pub fn run() {
                         }
                     }
                 });
+
+                db::start_background_sync(app.handle().clone(), turso_db.clone());
             }
 
             app.manage(turso_db);

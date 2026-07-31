@@ -335,13 +335,13 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = memo(({ task, onC
 
   const handleClearDeadline = () => {
     setDeadline(undefined);
-    onSave(task.id, { deadline: undefined }, false);
+    onSave(task.id, { deadline: undefined, scheduledDate: undefined }, false);
   };
 
   const handleDeadlineChange = (newDeadlineStr: string) => {
     const newDeadline = newDeadlineStr ? dayjs(newDeadlineStr).endOf('day').valueOf() : undefined;
     setDeadline(newDeadline);
-    onSave(task.id, { deadline: newDeadline }, false);
+    onSave(task.id, { deadline: newDeadline, scheduledDate: newDeadlineStr || undefined }, false);
   };
 
   return createPortal(
@@ -702,7 +702,10 @@ export const DailyQuadrants: React.FC<DailyQuadrantsProps> = memo(({
                   e.stopPropagation();
                   const today = new Date();
                   today.setHours(23, 59, 59, 999);
-                  onUpdateTask(task.id, { deadline: today.getTime() });
+                  onUpdateTask(task.id, {
+                    deadline: today.getTime(),
+                    scheduledDate: todayYMD(),
+                  });
                 }}
                 title="点击延期至今日"
                 style={{
@@ -934,10 +937,11 @@ export function TimeManagementPanel({ mode = 'weekly' }: TimeManagementPanelProp
     }, false);
   };
 
-  const handleAddTaskToQuadrant = (title: string, quadrant: QuadrantType, extras?: { deadline?: number; reminder?: string; description?: string }) => {
-    const task = addTask(title, quadrant, undefined);
+  const handleAddTaskToQuadrant = (title: string, quadrant: QuadrantType, extras?: { deadline?: number; scheduledDate?: string; reminder?: string; description?: string }) => {
+    const task = addTask(title, quadrant, extras?.scheduledDate);
     const updates: Partial<Task> = {};
     if (extras?.deadline) updates.deadline = extras.deadline;
+    if (extras?.scheduledDate) updates.scheduledDate = extras.scheduledDate;
     if (extras?.reminder) updates.reminder = extras.reminder;
     if (extras?.description) updates.description = extras.description;
     if (Object.keys(updates).length > 0) {
