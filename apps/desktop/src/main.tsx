@@ -144,13 +144,10 @@ function App() {
   );
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
 
-  // Preload all chunks once on mount, during idle time, and initialize background auto-update check
+  // Preload all chunks once on mount, during idle time
   React.useEffect(() => {
     if (!isNoteWindow && !isQuickEditWindow) {
       preloadAllModules(orderedIds);
-      import("./features/settings/updateStore").then(({ useUpdateStore }) => {
-        useUpdateStore.getState().initBackgroundUpdate();
-      });
       // 任务提醒调度器：桌面端由 Rust 后端 (reminder_scheduler.rs) 线程守护；
       // 空闲预热任务快捷编辑子窗口（窗口池），首次打开即秒显
       requestIdleCallback(() => {
