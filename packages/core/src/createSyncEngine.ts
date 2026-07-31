@@ -28,15 +28,29 @@ export const LOW_FREQ_DELAY = 300;
 
 const DEFAULT_DELAY_MS = HIGH_FREQ_DELAY;
 
+export type SyncEventListener = (key: string, status: 'scheduled' | 'completed' | 'error') => void;
+
 export interface SyncEngine {
   schedule(key: string, persist: () => Promise<void>, delay?: number): void;
   scheduleHighFreq(key: string, persist: () => Promise<void>): void;
   scheduleLowFreq(key: string, persist: () => Promise<void>): void;
   cancel(key: string): void;
+  onSync(listener: SyncEventListener): () => void;
 }
 
 export function createSyncEngine(): SyncEngine {
   const timers = new Map<string, number>();
+  const listeners = new Set<SyncEventListener>();
+
+  const notify = (key: string, status: 'scheduled' | 'completed' | 'error') => {
+    listeners.forEach((listener) => {
+      try {
+        listener(key, status);
+      } catch (err) {
+        logError('syncEngine', 'listener error', err);
+      }
+    });
+  };
 
   const schedule = (key: string, persist: () => Promise<void>, delay = DEFAULT_DELAY_MS) => {
     const existing = timers.get(key);
@@ -44,11 +58,15 @@ export function createSyncEngine(): SyncEngine {
       window.clearTimeout(existing);
     }
 
+    notify(key, 'scheduled');
+
     const id = window.setTimeout(async () => {
       try {
         await persist();
+        notify(key, 'completed');
       } catch (err) {
         logError('syncEngine', `persist failed for key "${key}"`, err);
+        notify(key, 'error');
       } finally {
         timers.delete(key);
       }
@@ -72,5 +90,13 @@ export function createSyncEngine(): SyncEngine {
         timers.delete(key);
       }
     },
+    onSync(listener: SyncEventListener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
   };
 }
+
+export const sharedSyncEngine = createSyncEngine();

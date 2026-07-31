@@ -114,6 +114,7 @@ const DictionaryWindow = React.lazy(() => import("./features/dictionary/Dictiona
 const TaskQuickEditWindow = React.lazy(() => import("./features/time-management/TaskQuickEditWindow").then(m => ({ default: m.TaskQuickEditWindow })));
 
 import { useDictionaryHotkey } from "./features/dictionary/useDictionaryHotkey";
+import { useSyncQueryInvalidator } from "./lib/useSyncQueryInvalidator";
 
 function App() {
   const params = new URLSearchParams(window.location.search);
@@ -121,6 +122,9 @@ function App() {
   const isNoteWindow = windowType === 'note';
   const isDictionaryWindow = windowType === 'dictionary';
   const isQuickEditWindow = windowType === 'task-quick-edit';
+
+  // Automatically invalidate TanStack Query cache when syncEngine completes a persistence task
+  useSyncQueryInvalidator();
 
   // Register the global-in-app Ctrl+L dictionary shortcut (works in every window).
   useDictionaryHotkey();
@@ -283,6 +287,9 @@ function App() {
   );
 }
 
+import { QueryClientProvider } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { queryClient } from "./lib/queryClient";
 import { ConfirmDialogProvider } from "./components/ui/ConfirmDeleteDialog";
 
 // 快捷编辑子窗口：在首次渲染前同步打上透明背景标记，避免闪白
@@ -291,9 +298,12 @@ if (new URLSearchParams(window.location.search).get('window') === 'task-quick-ed
 }
 
 const rootContent = (
-  <ConfirmDialogProvider>
-    <App />
-  </ConfirmDialogProvider>
+  <QueryClientProvider client={queryClient}>
+    <ConfirmDialogProvider>
+      <App />
+    </ConfirmDialogProvider>
+    {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
+  </QueryClientProvider>
 );
 
 createRoot(document.getElementById("root")!).render(

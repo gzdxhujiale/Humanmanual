@@ -26,8 +26,18 @@ export async function getMobileTursoClient(): Promise<Client> {
     await _client.sync();
     return _client;
   } catch (e) {
-    logError('MobileTursoClient', 'Failed to initialize Turso client', e);
-    throw e;
+    logError('MobileTursoClient', 'Embedded replica sync failed, falling back to direct remote Turso client mode', e);
+    try {
+      // Fallback to direct remote Turso client mode when WAL/protocol mismatch or encrypted headers prevent local replica sync
+      _client = createClient({
+        url: url,
+        authToken: token,
+      });
+      return _client;
+    } catch (err) {
+      logError('MobileTursoClient', 'Failed to initialize fallback remote Turso client', err);
+      throw err;
+    }
   }
 }
 

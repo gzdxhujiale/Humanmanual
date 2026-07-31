@@ -89,9 +89,9 @@ pub async fn habit_load_all(db: State<'_, TursoDb>) -> AppResult<HabitData> {
             updated_at: row.get(10).unwrap_or_default(),
         });
     }
+    drop(habits_rows);
 
-    let conn2 = db.conn()?;
-    let mut checkins_rows = conn2.query(
+    let mut checkins_rows = conn.query(
         "SELECT id, habit_id, date, completed, created_at, updated_at FROM habit_checkins WHERE deleted_at IS NULL",
         (),
     ).await?;

@@ -6,6 +6,7 @@
     "@expo/ui": "~57.0.8",
     "@humanmanual/core": "workspace:^",
     "@libsql/client": "^0.17.4",
+    "@tanstack/react-query": "^5.101.4",
     "dayjs": "^1.11.13",
     "expo": "~57.0.9",
     "expo-constants": "~57.0.8",

@@ -28,10 +28,10 @@ pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
             sort_order: row.get(3).unwrap_or(0),
         });
     }
+    drop(folder_rows);
 
     // Lists with item_count
-    let conn2 = db.conn()?;
-    let mut list_rows = conn2.query(
+    let mut list_rows = conn.query(
         "SELECT l.id, l.name, l.icon, l.color, l.view_type, l.folder_id, l.is_pinned, l.sort_order, COALESCE(n.cnt, 0) AS item_count FROM list_lists l LEFT JOIN (SELECT list_id, COUNT(*) AS cnt FROM list_notes WHERE deleted_at IS NULL GROUP BY list_id) n ON n.list_id = l.id WHERE l.deleted_at IS NULL ORDER BY l.is_pinned DESC, l.sort_order",
         (),
     ).await?;
@@ -50,10 +50,10 @@ pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
             item_count: row.get(8).unwrap_or(0),
         });
     }
+    drop(list_rows);
 
     // Note groups
-    let conn3 = db.conn()?;
-    let mut group_rows = conn3.query(
+    let mut group_rows = conn.query(
         "SELECT id, list_id, name, sort_order FROM list_note_groups WHERE deleted_at IS NULL ORDER BY sort_order",
         (),
     ).await?;
@@ -66,10 +66,10 @@ pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
             sort_order: row.get(3).unwrap_or(0),
         });
     }
+    drop(group_rows);
 
     // Notes
-    let conn4 = db.conn()?;
-    let mut note_rows = conn4.query(
+    let mut note_rows = conn.query(
         "SELECT id, list_id, group_id, title, content, is_pinned, sort_order, CAST(strftime('%s', created_at) * 1000 AS INTEGER) AS created_at_ms, CAST(strftime('%s', updated_at) * 1000 AS INTEGER) AS updated_at_ms FROM list_notes WHERE deleted_at IS NULL ORDER BY is_pinned DESC, sort_order, updated_at DESC",
         (),
     ).await?;
@@ -88,10 +88,10 @@ pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
             updated_at: row.get(8).unwrap_or(0),
         });
     }
+    drop(note_rows);
 
     // Templates
-    let conn5 = db.conn()?;
-    let mut tpl_rows = conn5.query("SELECT id, name, content FROM list_templates WHERE deleted_at IS NULL", ()).await?;
+    let mut tpl_rows = conn.query("SELECT id, name, content FROM list_templates WHERE deleted_at IS NULL", ()).await?;
     let mut templates = Vec::new();
     while let Ok(Some(row)) = tpl_rows.next().await {
         templates.push(ListTemplate {
@@ -100,6 +100,7 @@ pub async fn list_load_all(db: State<'_, TursoDb>) -> AppResult<ListAllData> {
             content: row.get(2).unwrap_or_default(),
         });
     }
+    drop(tpl_rows);
 
     Ok(ListAllData { folders, lists, note_groups, notes, templates })
 }

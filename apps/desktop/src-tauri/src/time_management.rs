@@ -56,9 +56,9 @@ pub async fn tm_load_all(db: State<'_, TursoDb>) -> AppResult<TimeManagementData
             created_at: row.get(2).unwrap_or(0),
         });
     }
+    drop(roles_rows);
 
-    let conn2 = db.conn()?;
-    let mut tasks_rows = conn2.query(
+    let mut tasks_rows = conn.query(
         "SELECT id, title, role_id, quadrant, scheduled_date, time_of_day, completed, created_at, completed_at, description, deadline, reminder FROM time_management_tasks WHERE deleted_at IS NULL",
         (),
     ).await?;

@@ -59,8 +59,8 @@ pub fn run() {
                 .stack_size(32 * 1024 * 1024) // 32 MB
                 .spawn(move || {
                     tauri::async_runtime::block_on(async move {
-                        let (db, is_remote, init_err) = match db::establish_local_connection(&handle_clone).await {
-                            Ok(trio) => trio,
+                        let (db, is_remote, is_replica, init_err) = match db::establish_local_connection(&handle_clone).await {
+                            Ok(quad) => quad,
                             Err(e) => {
                                 let err_str = e.to_string();
                                 eprintln!("[DB] Failed to connect to database: {}, fallbacking immediately to local SQLite mode", err_str);
@@ -75,7 +75,7 @@ pub fn run() {
                                     .build()
                                     .await
                                     .unwrap_or_else(|e2| panic!("Fatal: Could not open local SQLite DB: {}", e2));
-                                (local_db, false, Some(err_str))
+                                (local_db, false, false, Some(err_str))
                             }
                         };
 
@@ -87,7 +87,7 @@ pub fn run() {
                             eprintln!("[DB] Failed to get connection for schema setup");
                         }
 
-                        TursoDb::new(db, is_remote, init_err)
+                        TursoDb::new(db, is_remote, is_replica, init_err)
                     })
                 })
                 .expect("Failed to spawn db-setup thread")
@@ -97,7 +97,7 @@ pub fn run() {
                     panic!("DB setup thread panicked");
                 });
 
-            if turso_db.is_remote {
+            if turso_db.is_replica {
                 let db_sync = turso_db.db.clone();
                 let sync_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {

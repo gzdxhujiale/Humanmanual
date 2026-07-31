@@ -88,9 +88,9 @@ pub async fn pomodoro_load_all(db: State<'_, TursoDb>) -> AppResult<PomodoroData
             created_at: row.get::<String>(11).unwrap_or_default(),
         });
     }
+    drop(records_rows);
 
-    let conn2 = db.conn()?;
-    let mut favs_rows = conn2.query(
+    let mut favs_rows = conn.query(
         "SELECT id, name, icon, mode, duration_minutes, accumulated_minutes, linked_target, is_archived, created_at FROM pomodoro_favorites WHERE deleted_at IS NULL ORDER BY created_at DESC",
         (),
     ).await?;

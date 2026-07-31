@@ -68,9 +68,9 @@ pub async fn mission_load_all(db: State<'_, TursoDb>) -> AppResult<MissionAllDat
     } else {
         None
     };
+    drop(stmt_rows);
 
-    let conn2 = db.conn()?;
-    let mut role_rows = conn2.query(
+    let mut role_rows = conn.query(
         "SELECT id, name, icon, sort_order, created_at, updated_at FROM mission_roles WHERE deleted_at IS NULL ORDER BY sort_order",
         (),
     ).await?;
@@ -85,9 +85,9 @@ pub async fn mission_load_all(db: State<'_, TursoDb>) -> AppResult<MissionAllDat
             updated_at: r.get(5).unwrap_or_default(),
         });
     }
+    drop(role_rows);
 
-    let conn3 = db.conn()?;
-    let mut goal_rows = conn3.query(
+    let mut goal_rows = conn.query(
         "SELECT id, role_id, title, status, time_scope, start_date, end_date, sort_order, created_at, updated_at FROM mission_goals WHERE deleted_at IS NULL ORDER BY sort_order",
         (),
     ).await?;
@@ -106,6 +106,7 @@ pub async fn mission_load_all(db: State<'_, TursoDb>) -> AppResult<MissionAllDat
             updated_at: r.get(9).unwrap_or_default(),
         });
     }
+    drop(goal_rows);
 
     Ok(MissionAllData { statement, roles, goals })
 }
