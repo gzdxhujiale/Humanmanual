@@ -60,8 +60,13 @@ export function useReviewActions(): ReviewActions {
       const prev = queryClient.getQueryData<DailyReview[]>(queryKeys.dailyReviews.all) ?? EMPTY_REVIEWS;
       const existing = prev.find((r) => r.date === date);
 
-      // Blank new review without existing record: return transient blank object
-      if (isReviewEmpty(content) && (rating === undefined || rating === 0) && !existing) {
+      const isEmpty = isReviewEmpty(content) && (rating === undefined || rating === 0);
+
+      // Blank review: if existing record exists, delete it from DB & cloud, otherwise return transient blank object
+      if (isEmpty) {
+        if (existing) {
+          deleteReview(existing.id);
+        }
         return { id: '', date, content: '', rating: 0, createdAt: 0, updatedAt: 0 };
       }
 

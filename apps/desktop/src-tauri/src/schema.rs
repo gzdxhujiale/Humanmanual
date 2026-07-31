@@ -36,5 +36,51 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
         )
         .await;
 
+    // 保证 daily_reviews 基础表结构存在
+    let _ = conn
+        .execute(
+            "CREATE TABLE IF NOT EXISTS daily_reviews (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                content TEXT,
+                rating INTEGER,
+                created_at TEXT,
+                updated_at TEXT,
+                deleted_at TEXT
+            )",
+            (),
+        )
+        .await;
+
+    // 修复历史数据库中因未重置 deleted_at 导致的被误设软删除但存在有效内容的复盘记录
+    let _ = conn
+        .execute(
+            "UPDATE daily_reviews SET deleted_at = NULL WHERE deleted_at IS NOT NULL AND length(trim(content)) > 0 AND content != '{}' AND content != '<p></p>'",
+            (),
+        )
+        .await;
+
+    // 按 date 维度对 daily_reviews 幂等去重：保留未软删除且 updated_at 最新的记录
+    let _ = conn
+        .execute(
+            "DELETE FROM daily_reviews WHERE rowid NOT IN (
+                SELECT rowid FROM (
+                    SELECT rowid, ROW_NUMBER() OVER (
+                        PARTITION BY date
+                        ORDER BY (deleted_at IS NULL) DESC, updated_at DESC, rowid DESC
+                    ) AS rn FROM daily_reviews
+                ) WHERE rn = 1
+            )",
+            (),
+        )
+        .await;
+
+    let _ = conn
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date)",
+            (),
+        )
+        .await;
+
     Ok(())
 }

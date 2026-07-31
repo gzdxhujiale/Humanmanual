@@ -32,27 +32,26 @@ pub async fn daily_review_load_all(db: State<'_, TursoDb>) -> AppResult<Vec<Dail
         .await?;
 
     let parse_row_ms = |row: &libsql::Row, idx: i32| -> Option<i64> {
-        if let Ok(ms) = row.get::<i64>(idx) {
-            return Some(ms);
+        match row.get_value(idx) {
+            Ok(libsql::Value::Integer(n)) => Some(n),
+            Ok(libsql::Value::Real(f)) => Some(f as i64),
+            Ok(libsql::Value::Text(s)) => {
+                if let Ok(ms) = s.parse::<i64>() {
+                    return Some(ms);
+                }
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                    return Some(dt.timestamp_millis());
+                }
+                if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
+                    return Some(naive.and_utc().timestamp_millis());
+                }
+                if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                    return Some(naive.and_utc().timestamp_millis());
+                }
+                None
+            }
+            _ => None,
         }
-        if let Ok(f) = row.get::<f64>(idx) {
-            return Some(f as i64);
-        }
-        if let Ok(s) = row.get::<String>(idx) {
-            if let Ok(ms) = s.parse::<i64>() {
-                return Some(ms);
-            }
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                return Some(dt.timestamp_millis());
-            }
-            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
-                return Some(naive.and_utc().timestamp_millis());
-            }
-            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
-                return Some(naive.and_utc().timestamp_millis());
-            }
-        }
-        None
     };
 
     let mut result = Vec::new();
@@ -62,8 +61,16 @@ pub async fn daily_review_load_all(db: State<'_, TursoDb>) -> AppResult<Vec<Dail
             None => break,
         };
 
-        let id: String = row.get(0).unwrap_or_default();
-        let raw_date: String = row.get(1).unwrap_or_default();
+        let id: String = match row.get_value(0) {
+            Ok(libsql::Value::Text(s)) => s,
+            Ok(libsql::Value::Integer(n)) => n.to_string(),
+            _ => String::new(),
+        };
+
+        let raw_date: String = match row.get_value(1) {
+            Ok(libsql::Value::Text(s)) => s,
+            _ => String::new(),
+        };
         let date = if raw_date.len() >= 10 {
             let b = raw_date.trim().as_bytes();
             if b.len() >= 10 && b[4] == b'-' && b[7] == b'-' {
@@ -76,8 +83,19 @@ pub async fn daily_review_load_all(db: State<'_, TursoDb>) -> AppResult<Vec<Dail
         } else {
             raw_date
         };
-        let content: String = row.get(2).unwrap_or_default();
-        let rating: Option<i32> = row.get(3).ok();
+
+        let content: String = match row.get_value(2) {
+            Ok(libsql::Value::Text(s)) => s,
+            _ => String::new(),
+        };
+
+        let rating: Option<i32> = match row.get_value(3) {
+            Ok(libsql::Value::Integer(n)) => Some(n as i32),
+            Ok(libsql::Value::Real(f)) => Some(f as i32),
+            Ok(libsql::Value::Text(s)) => s.parse::<i32>().ok(),
+            _ => None,
+        };
+
         let created_at = parse_row_ms(&row, 4);
         let updated_at = parse_row_ms(&row, 5);
 
@@ -104,14 +122,34 @@ pub async fn daily_review_save(review: DailyReviewRow, db: State<'_, TursoDb>) -
     let now = now_iso();
 
     let conn = db.conn()?;
+
+    // 按 id 或 date 查找已存在的记录，复用 ID 避免同一日期产生多条不同 ID 导致的存取冲突
+    let mut rows = conn
+        .query(
+            "SELECT id FROM daily_reviews WHERE id = ?1 OR date = ?2 LIMIT 1",
+            libsql::params![review.id.clone(), review.date.clone()],
+        )
+        .await?;
+
+    let target_id = if let Ok(Some(row)) = rows.next().await {
+        match row.get_value(0) {
+            Ok(libsql::Value::Text(s)) if !s.is_empty() => s,
+            _ => review.id.clone(),
+        }
+    } else {
+        review.id.clone()
+    };
+
     conn.execute(
-        "INSERT INTO daily_reviews (id, date, content, rating, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO daily_reviews (id, date, content, rating, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
          ON CONFLICT(id) DO UPDATE SET
+            date = excluded.date,
             content = excluded.content,
             rating = excluded.rating,
-            updated_at = excluded.updated_at",
-        libsql::params![review.id, review.date, review.content, review.rating, created_iso, now],
+            updated_at = excluded.updated_at,
+            deleted_at = NULL",
+        libsql::params![target_id, review.date, review.content, review.rating, created_iso, now],
     )
     .await?;
 
