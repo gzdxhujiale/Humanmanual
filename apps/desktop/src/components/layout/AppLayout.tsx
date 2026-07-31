@@ -28,8 +28,8 @@ export const AppLayout: React.FC<{
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.habits.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.dailyReviews.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.lists.all });
       // Store-owned modules still reload imperatively.
-      import("../../features/lists/listsStore").then(m => void m.useListsStore.getState().init());
       import("../../features/pomodoro/pomodoroStore").then(m => void m.usePomodoroStore.getState().syncAllFromDB());
     });
     return () => {

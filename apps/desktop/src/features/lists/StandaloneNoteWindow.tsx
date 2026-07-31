@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useListsStore } from './listsStore';
+import { useListsData, useListsActions } from './useListsQuery';
 import { Note } from './listsTypes';
 import { MoreHorizontal, Pin, Cloud, Minus, Square, Copy, X } from 'lucide-react';
 import * as listsService from './listsService';
@@ -8,8 +8,11 @@ import { logWarn } from '@humanmanual/core';
 import { ReactjsTiptapEditor, convertMarkdownToTipTapJson, convertTipTapJsonToMarkdown } from '../reactjs-tiptap-v1';
 import './lists.css';
 
+const EMPTY_NOTES: Note[] = [];
+
 export function StandaloneNoteWindow() {
-  const store = useListsStore();
+  const { data } = useListsData();
+  const notes = data?.notes ?? EMPTY_NOTES;
   const [noteId, setNoteId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -20,11 +23,7 @@ export function StandaloneNoteWindow() {
     }
   }, []);
 
-  useEffect(() => {
-    store.init();
-  }, [store]);
-
-  const note = store.data.notes.find(n => n.id === noteId) || null;
+  const note = notes.find(n => n.id === noteId) || null;
 
   // 笔记被其他窗口删除（删除事件同步过来）：自动关闭本窗口，不停在“不存在”占位页
   const hadNoteRef = useRef(false);
@@ -58,7 +57,7 @@ export function StandaloneNoteWindow() {
 }
 
 function StandaloneNoteEditorContent({ note }: { note: Note }) {
-  const store = useListsStore();
+  const { updateNote, deleteNote } = useListsActions();
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content || '');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -119,22 +118,22 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
       const currentTitle = latestDataRef.current.title;
       const currentContent = latestDataRef.current.content;
       if (currentId && (currentTitle !== note.title || currentContent !== note.content)) {
-        store.updateNote(currentId, { title: currentTitle, content: currentContent });
+        updateNote(currentId, { title: currentTitle, content: currentContent });
       }
     };
-  }, [store, note.title, note.content]);
+  }, [updateNote, note.title, note.content]);
 
   // Debounced auto-save effect
   useEffect(() => {
     if (title !== note.title || content !== note.content) {
       setSaveStatus('saving');
       const timer = setTimeout(() => {
-        store.updateNote(note.id, { title, content });
+        updateNote(note.id, { title, content });
         setSaveStatus('saved');
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [title, content, note.id, note.title, note.content, store]);
+  }, [title, content, note.id, note.title, note.content, updateNote]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -211,7 +210,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
   };
 
   const handlePin = () => {
-    store.updateNote(note.id, { isPinned: !note.isPinned });
+    updateNote(note.id, { isPinned: !note.isPinned });
   };
 
   const handleImport = async () => {
@@ -233,7 +232,7 @@ function StandaloneNoteEditorContent({ note }: { note: Note }) {
 
   const handleDelete = () => {
     if (window.confirm(`确定要删除笔记"${note.title || '未命名笔记'}"吗？`)) {
-      store.deleteNote(note.id);
+      deleteNote(note.id);
       handleCloseWindow();
     }
   };

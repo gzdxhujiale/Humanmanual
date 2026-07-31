@@ -9,8 +9,9 @@ import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, us
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-import { useListsStore } from './listsStore';
-import { List, Folder, ViewType, Note, Template } from './listsTypes';
+import { useListsData, useListsActions } from './useListsQuery';
+import { sortLists, sortFolders } from './listsSelectors';
+import { List, Folder, ViewType, Note, NoteGroup, Template } from './listsTypes';
 import { getNoteOpenMode, setNoteOpenMode, openNoteInNewWindow, NoteOpenMode } from './noteOpenService';
 import { TemplateModal, useTemplateData, useTemplateActions } from '../templates';
 import * as listsService from './listsService';
@@ -120,7 +121,7 @@ interface SidebarListItemDroppableProps {
 }
 
 const SidebarListItemDroppable: React.FC<SidebarListItemDroppableProps> = memo(({ list, activeListId, dragOverListId, onSelectList, isNested, children }) => {
-  const moveNoteToList = useListsStore(s => s.moveNoteToList);
+  const { moveNoteToList } = useListsActions();
   const [isHovered, setIsHovered] = useState(false);
   const { setNodeRef, isOver } = useDroppable({
     id: `sidebar-list-${list.id}`,
@@ -1272,52 +1273,45 @@ type DragOverTarget =
   | { type: 'standalone-area' }
   | null;
 
-export function ListsPanel() {
-  // Granular store selector hooks
-  const rawLists = useListsStore(s => s.data.lists);
-  const rawFolders = useListsStore(s => s.data.folders);
-  const rawNotes = useListsStore(s => s.data.notes);
-  const rawNoteGroups = useListsStore(s => s.data.noteGroups);
+const EMPTY_LISTS: List[] = [];
+const EMPTY_FOLDERS: Folder[] = [];
+const EMPTY_NOTES: Note[] = [];
+const EMPTY_NOTE_GROUPS: NoteGroup[] = [];
 
-  const storeInit = useListsStore(s => s.init);
-  const getLists = useListsStore(s => s.getLists);
-  const getFolders = useListsStore(s => s.getFolders);
-  const moveNoteToList = useListsStore(s => s.moveNoteToList);
-  const reorderNotes = useListsStore(s => s.reorderNotes);
-  const moveNoteAndReorder = useListsStore(s => s.moveNoteAndReorder);
-  const reorderFolders = useListsStore(s => s.reorderFolders);
-  const reorderLists = useListsStore(s => s.reorderLists);
-  const moveList = useListsStore(s => s.moveList);
-  const addFolder = useListsStore(s => s.addFolder);
-  const updateFolder = useListsStore(s => s.updateFolder);
-  const deleteFolder = useListsStore(s => s.deleteFolder);
-  const addList = useListsStore(s => s.addList);
-  const updateList = useListsStore(s => s.updateList);
-  const duplicateList = useListsStore(s => s.duplicateList);
-  const deleteList = useListsStore(s => s.deleteList);
-  const addNote = useListsStore(s => s.addNote);
-  const updateNote = useListsStore(s => s.updateNote);
-  const deleteNote = useListsStore(s => s.deleteNote);
-  const addGroup = useListsStore(s => s.addGroup);
-  const updateGroup = useListsStore(s => s.updateGroup);
-  const deleteGroup = useListsStore(s => s.deleteGroup);
+export function ListsPanel() {
+  // Query-backed data + write actions
+  const { data } = useListsData();
+  const rawLists = data?.lists ?? EMPTY_LISTS;
+  const rawFolders = data?.folders ?? EMPTY_FOLDERS;
+  const rawNotes = data?.notes ?? EMPTY_NOTES;
+  const rawNoteGroups = data?.noteGroups ?? EMPTY_NOTE_GROUPS;
+
+  const {
+    moveNoteToList,
+    reorderNotes,
+    moveNoteAndReorder,
+    reorderFolders,
+    reorderLists,
+    moveList,
+    addFolder,
+    updateFolder,
+    deleteFolder,
+    addList,
+    updateList,
+    duplicateList,
+    deleteList,
+    addNote,
+    updateNote,
+    deleteNote,
+    addGroup,
+    updateGroup,
+    deleteGroup,
+  } = useListsActions();
   const { addTemplate, updateTemplate, deleteTemplate } = useTemplateActions();
 
-  const lists = useMemo(() => {
-    return [...rawLists].sort((a, b) => {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return (a.sortOrder || 0) - (b.sortOrder || 0);
-    });
-  }, [rawLists]);
+  const lists = useMemo(() => sortLists(rawLists), [rawLists]);
 
-  const folders = useMemo(() => {
-    return [...rawFolders].sort((a, b) => {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return (a.sortOrder || 0) - (b.sortOrder || 0);
-    });
-  }, [rawFolders]);
+  const folders = useMemo(() => sortFolders(rawFolders), [rawFolders]);
 
   // Pre-build O(1) Sets & Maps for drag-and-drop hit testing
   const folderIdSet = useMemo(() => new Set(folders.map(f => f.id)), [folders]);
@@ -1430,38 +1424,30 @@ export function ListsPanel() {
     }, 3000);
   };
 
+  const didInitActiveList = useRef(false);
   useEffect(() => {
-    storeInit().then(() => {
-      const loadedLists = getLists();
-      
-      if (loadedLists.length > 0) {
-        const savedId = localStorage.getItem('lists-active-list-id');
-        const exists = savedId && loadedLists.some(l => l.id === savedId);
+    if (didInitActiveList.current) return;
+    if (lists.length === 0) return; // wait for the query to load
+    didInitActiveList.current = true;
 
-        if (!exists) {
-          const loadedFolders = getFolders();
-          let defaultListId = loadedLists[0].id;
+    const savedId = localStorage.getItem('lists-active-list-id');
+    const exists = savedId && lists.some(l => l.id === savedId);
+    if (exists) return;
 
-          if (loadedFolders.length > 0) {
-            const firstFolder = loadedFolders[0];
-            const folderLists = loadedLists.filter(l => l.folderId === firstFolder.id);
-            if (folderLists.length > 0) {
-              folderLists.sort((a, b) => {
-                if (a.isPinned && !b.isPinned) return -1;
-                if (!a.isPinned && b.isPinned) return 1;
-                return (a.sortOrder || 0) - (b.sortOrder || 0);
-              });
-              defaultListId = folderLists[0].id;
-            }
-          }
-
-          setActiveListId(defaultListId);
-          localStorage.setItem('lists-active-list-id', defaultListId);
-        }
+    // `lists`/`folders` are already sorted (pinned first, then sortOrder), so the
+    // first list of the first folder is simply the first matching entry.
+    let defaultListId = lists[0].id;
+    if (folders.length > 0) {
+      const firstFolder = folders[0];
+      const folderLists = lists.filter(l => l.folderId === firstFolder.id);
+      if (folderLists.length > 0) {
+        defaultListId = folderLists[0].id;
       }
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }
+
+    setActiveListId(defaultListId);
+    localStorage.setItem('lists-active-list-id', defaultListId);
+  }, [lists, folders]);
 
   useEffect(() => {
     if (activeListId) {

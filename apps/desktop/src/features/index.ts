@@ -9,7 +9,8 @@ export * from './habit/habitStore';
 
 export * from './time-management/useTimeManagementQuery';
 
-export * from './lists/listsStore';
+export * from './lists/useListsQuery';
+export * from './lists/listsSelectors';
 export * from './daily-review/useDailyReviewQuery';
 export * from './daily-review/dailyReviewSelectors';
 export * from './pomodoro/pomodoroStore';
