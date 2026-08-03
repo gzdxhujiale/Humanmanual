@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
-use crate::repo::FromRow;
+use crate::repo::{FromRow, RowExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -16,12 +16,11 @@ pub struct ListFolder {
 
 impl FromRow for ListFolder {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let is_pinned_i: i32 = row.get(2).unwrap_or(0);
         Ok(ListFolder {
-            id: row.get(0)?,
-            name: row.get(1).unwrap_or_default(),
-            is_pinned: is_pinned_i != 0,
-            sort_order: row.get(3).unwrap_or(0),
+            id: row.parse_str(0),
+            name: row.parse_str(1),
+            is_pinned: row.parse_bool(2),
+            sort_order: row.parse_i32(3),
         })
     }
 }
@@ -43,17 +42,17 @@ pub struct ListList {
 
 impl FromRow for ListList {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let is_pinned_i: i32 = row.get(6).unwrap_or(0);
+        let vt = row.parse_str(4);
         Ok(ListList {
-            id: row.get(0)?,
-            name: row.get(1).unwrap_or_default(),
-            icon: row.get(2).unwrap_or_default(),
-            color: row.get(3).unwrap_or_default(),
-            view_type: row.get(4).unwrap_or_else(|_| "list".to_string()),
-            folder_id: row.get(5).ok(),
-            is_pinned: is_pinned_i != 0,
-            sort_order: row.get(7).unwrap_or(0),
-            item_count: row.get(8).unwrap_or(0),
+            id: row.parse_str(0),
+            name: row.parse_str(1),
+            icon: row.parse_str(2),
+            color: row.parse_str(3),
+            view_type: if vt.is_empty() { "list".to_string() } else { vt },
+            folder_id: row.parse_opt_str(5),
+            is_pinned: row.parse_bool(6),
+            sort_order: row.parse_i32(7),
+            item_count: row.parse_i64(8),
         })
     }
 }
@@ -70,10 +69,10 @@ pub struct ListNoteGroup {
 impl FromRow for ListNoteGroup {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
         Ok(ListNoteGroup {
-            id: row.get(0)?,
-            list_id: row.get(1).unwrap_or_default(),
-            name: row.get(2).unwrap_or_default(),
-            sort_order: row.get(3).unwrap_or(0),
+            id: row.parse_str(0),
+            list_id: row.parse_str(1),
+            name: row.parse_str(2),
+            sort_order: row.parse_i32(3),
         })
     }
 }
@@ -94,17 +93,16 @@ pub struct ListNote {
 
 impl FromRow for ListNote {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let is_pinned_i: i32 = row.get(5).unwrap_or(0);
         Ok(ListNote {
-            id: row.get(0)?,
-            list_id: row.get(1).unwrap_or_default(),
-            group_id: row.get(2).ok(),
-            title: row.get(3).unwrap_or_default(),
-            content: row.get(4).unwrap_or_default(),
-            is_pinned: is_pinned_i != 0,
-            sort_order: row.get(6).unwrap_or(0),
-            created_at: row.get(7).unwrap_or(0),
-            updated_at: row.get(8).unwrap_or(0),
+            id: row.parse_str(0),
+            list_id: row.parse_str(1),
+            group_id: row.parse_opt_str(2),
+            title: row.parse_str(3),
+            content: row.parse_str(4),
+            is_pinned: row.parse_bool(5),
+            sort_order: row.parse_i32(6),
+            created_at: row.parse_i64(7),
+            updated_at: row.parse_i64(8),
         })
     }
 }
@@ -120,9 +118,9 @@ pub struct ListTemplate {
 impl FromRow for ListTemplate {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
         Ok(ListTemplate {
-            id: row.get(0)?,
-            name: row.get(1).unwrap_or_default(),
-            content: row.get(2).unwrap_or_default(),
+            id: row.parse_str(0),
+            name: row.parse_str(1),
+            content: row.parse_str(2),
         })
     }
 }

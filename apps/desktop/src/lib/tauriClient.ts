@@ -10,10 +10,20 @@ import { logError, logSilent } from "@humanmanual/core";
  * prefix format, future toast/telemetry — changes here, nowhere else.
  */
 
+/**
+ * Check if the application is running inside a Tauri Webview environment.
+ */
+export function isTauriEnv(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
   } catch (e) {
+    if (!isTauriEnv()) {
+      console.warn(`[Tauri IPC] Command '${cmd}' failed: App is running in standard browser or Tauri Rust backend process is down.`);
+    }
     logError('tauri', `${cmd} failed`, e);
     throw e;
   }

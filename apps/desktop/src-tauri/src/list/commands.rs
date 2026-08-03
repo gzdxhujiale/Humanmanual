@@ -4,7 +4,7 @@ use tauri::State;
 
 use super::types::*;
 use crate::error::AppResult;
-use crate::repo::{query_all, with_txn};
+use crate::repo::{query_all, with_txn, RowExt};
 use crate::sync::{now_iso, now_ms};
 use crate::db::TursoDb;
 
@@ -159,9 +159,9 @@ pub async fn list_duplicate_list(source_id: String, new_list: ListList, db: Stat
     let mut group_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut groups_to_insert = Vec::new();
     while let Some(row) = group_rows.next().await? {
-        let old_id: String = row.get(0)?;
-        let name: String = row.get(1).unwrap_or_default();
-        let sort_order: i32 = row.get(2).unwrap_or(0);
+        let old_id = row.parse_str(0);
+        let name = row.parse_str(1);
+        let sort_order = row.parse_i32(2);
         let new_id = format!("group-{}-{}", now_ms_val, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
         group_id_map.insert(old_id, new_id.clone());
         groups_to_insert.push((new_id, name, sort_order));
@@ -174,13 +174,13 @@ pub async fn list_duplicate_list(source_id: String, new_list: ListList, db: Stat
     ).await?;
     let mut notes_to_insert = Vec::new();
     while let Some(row) = note_rows.next().await? {
-        let old_group_id: Option<String> = row.get(1).ok();
+        let old_group_id = row.parse_opt_str(1);
         let new_group_id = old_group_id.and_then(|gid| group_id_map.get(&gid).cloned());
         let new_note_id = format!("note-{}-{}", now_ms_val, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
-        let title: String = row.get(2).unwrap_or_default();
-        let content: String = row.get(3).unwrap_or_default();
-        let is_pinned: i32 = row.get(4).unwrap_or(0);
-        let sort_order: i32 = row.get(5).unwrap_or(0);
+        let title = row.parse_str(2);
+        let content = row.parse_str(3);
+        let is_pinned = if row.parse_bool(4) { 1 } else { 0 };
+        let sort_order = row.parse_i32(5);
         notes_to_insert.push((new_note_id, new_group_id, title, content, is_pinned, sort_order));
     }
     drop(note_rows);

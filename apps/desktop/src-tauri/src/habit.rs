@@ -3,7 +3,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::AppResult;
-use crate::repo::with_txn;
+use crate::repo::{with_txn, RowExt};
 use crate::sync::now_iso;
 use crate::db::TursoDb;
 
@@ -82,35 +82,36 @@ pub async fn habit_load_all(db: State<'_, TursoDb>) -> AppResult<HabitData> {
     let mut check_ins = Vec::new();
     let mut seen = std::collections::HashSet::new();
     while let Some(row) = rows.next().await? {
-        let habit_id: String = row.get(0)?;
+        let habit_id = row.parse_str(0);
+        if habit_id.is_empty() {
+            continue;
+        }
         if seen.insert(habit_id.clone()) {
-            let auto_popup_log_i32: i32 = row.get(8).unwrap_or(0);
-            let reminder: Option<String> = row.get(7).ok();
+            let reminder = row.parse_opt_str(7);
             habits.push(Habit {
                 id: habit_id.clone(),
-                name: row.get(1).unwrap_or_default(),
-                frequency: row.get(2).ok(),
-                goal: row.get(3).ok(),
-                start_date: row.get(4).ok(),
-                duration: row.get(5).ok(),
-                group: row.get(6).ok(),
+                name: row.parse_str(1),
+                frequency: row.parse_opt_str(2),
+                goal: row.parse_opt_str(3),
+                start_date: row.parse_opt_str(4),
+                duration: row.parse_opt_str(5),
+                group: row.parse_opt_str(6),
                 check_in_time: reminder.clone(),
                 reminder,
-                auto_popup_log: auto_popup_log_i32 != 0,
-                created_at: row.get(9).unwrap_or_default(),
-                updated_at: row.get(10).unwrap_or_default(),
+                auto_popup_log: row.parse_bool(8),
+                created_at: row.parse_str(9),
+                updated_at: row.parse_str(10),
             });
         }
         // LEFT JOIN 无打卡时 c.* 为 NULL，跳过
-        if let Ok(checkin_id) = row.get::<String>(11) {
-            let completed: i32 = row.get(13).unwrap_or(0);
+        if let Some(checkin_id) = row.parse_opt_str(11) {
             check_ins.push(HabitCheckIn {
                 id: checkin_id,
                 habit_id,
-                date: row.get(12).unwrap_or_default(),
-                completed: completed != 0,
-                created_at: row.get(14).unwrap_or_default(),
-                updated_at: row.get(15).unwrap_or_default(),
+                date: row.parse_str(12),
+                completed: row.parse_bool(13),
+                created_at: row.parse_str(14),
+                updated_at: row.parse_str(15),
             });
         }
     }
@@ -205,14 +206,13 @@ pub async fn habit_toggle_checkin(
     ).await?;
 
     if let Some(row) = rows.next().await? {
-        let final_completed: i32 = row.get(1).unwrap_or(0);
         return Ok(HabitCheckIn {
-            id: row.get(0)?,
+            id: row.parse_str(0),
             habit_id,
             date,
-            completed: final_completed != 0,
-            created_at: row.get(2).unwrap_or_default(),
-            updated_at: row.get(3).unwrap_or_default(),
+            completed: row.parse_bool(1),
+            created_at: row.parse_str(2),
+            updated_at: row.parse_str(3),
         });
     }
 

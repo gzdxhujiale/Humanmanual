@@ -4,6 +4,7 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::db::TursoDb;
+use crate::repo::RowExt;
 
 /// 启动后首次扫描前的延迟（等待 DB 初始化完成）
 const STARTUP_DELAY_SECS: u64 = 5;
@@ -117,13 +118,14 @@ pub async fn check_and_send_reminders(app_handle: &AppHandle, turso: &TursoDb) {
 
     let mut tasks: Vec<(String, String, Option<i64>, Option<String>, i64, String)> = Vec::new();
     while let Ok(Some(row)) = rows.next().await {
-        let id: String = row.get(0).unwrap_or_default();
-        let title: String = row.get(1).unwrap_or_default();
-        let deadline: Option<i64> = row.get(2).ok();
-        let scheduled_date: Option<String> = row.get(3).ok();
-        let created_at: i64 = row.get(4).unwrap_or(0);
-        let reminder_raw: String = row.get(5).unwrap_or_default();
-        tasks.push((id, title, deadline, scheduled_date, created_at, reminder_raw));
+        tasks.push((
+            row.parse_str(0),
+            row.parse_str(1),
+            row.parse_opt_i64(2),
+            row.parse_opt_str(3),
+            row.parse_i64(4),
+            row.parse_str(5),
+        ));
     }
 
     for (id, title, deadline, scheduled_date, created_at, reminder_raw) in tasks {

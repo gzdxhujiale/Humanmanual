@@ -68,25 +68,25 @@ pub async fn dict_lookup(word: String, db: State<'_, TursoDb>) -> AppResult<Dict
     ).await;
     if let Ok(ref mut rows) = cache_rows {
         if let Ok(Some(row)) = rows.next().await {
-            let word_val: String = row.get(0).unwrap_or_default();
+            let word_val: String = row.get::<Option<String>>(0).ok().flatten().unwrap_or_default();
             let audio_base = format!("https://dict.youdao.com/dictvoice?audio={}", urlencoding_simple(&word_val));
-            let ex_str: String = row.get(9).unwrap_or_else(|_| "[]".to_string());
-            let phr_str: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
+            let ex_str: String = row.get::<Option<String>>(9).ok().flatten().unwrap_or_else(|| "[]".to_string());
+            let phr_str: String = row.get::<Option<String>>(10).ok().flatten().unwrap_or_else(|| "[]".to_string());
             let examples: Vec<DictExample> = serde_json::from_str(&ex_str).unwrap_or_default();
             let phrases: Vec<DictPhrase> = serde_json::from_str(&phr_str).unwrap_or_default();
 
             return Ok(DictEntry {
                 word: word_val,
-                phonetic: row.get(1).unwrap_or_default(),
+                phonetic: row.get::<Option<String>>(1).ok().flatten().unwrap_or_default(),
                 us_audio: Some(format!("{}&type=2", audio_base)),
                 uk_audio: Some(format!("{}&type=1", audio_base)),
-                definition: row.get(2).unwrap_or_default(),
-                translation: row.get(3).unwrap_or_default(),
-                pos: row.get(4).unwrap_or_default(),
-                tag: row.get(5).unwrap_or_default(),
-                exchange: row.get(6).unwrap_or_default(),
-                collins: row.get(7).unwrap_or(0),
-                oxford: row.get(8).unwrap_or(0),
+                definition: row.get::<Option<String>>(2).ok().flatten().unwrap_or_default(),
+                translation: row.get::<Option<String>>(3).ok().flatten().unwrap_or_default(),
+                pos: row.get::<Option<String>>(4).ok().flatten().unwrap_or_default(),
+                tag: row.get::<Option<String>>(5).ok().flatten().unwrap_or_default(),
+                exchange: row.get::<Option<String>>(6).ok().flatten().unwrap_or_default(),
+                collins: row.get::<Option<i64>>(7).ok().flatten().unwrap_or(0),
+                oxford: row.get::<Option<i64>>(8).ok().flatten().unwrap_or(0),
                 found: true,
                 examples,
                 phrases,

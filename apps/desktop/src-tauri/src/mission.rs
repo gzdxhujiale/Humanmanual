@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::repo::{query_all, with_txn, FromRow};
+use crate::repo::{query_all, with_txn, FromRow, RowExt};
 use crate::sync::now_ms;
 use crate::db::TursoDb;
 
@@ -31,12 +31,12 @@ pub struct Role {
 impl FromRow for Role {
     fn from_row(r: &libsql::Row) -> AppResult<Self> {
         Ok(Role {
-            id: r.get(0)?,
-            name: r.get(1).unwrap_or_default(),
-            icon: r.get(2).unwrap_or_default(),
-            sort_order: r.get(3).unwrap_or(0),
-            created_at: r.get(4).unwrap_or(0),
-            updated_at: r.get(5).unwrap_or(0),
+            id: r.parse_str(0),
+            name: r.parse_str(1),
+            icon: r.parse_str(2),
+            sort_order: r.parse_i32(3),
+            created_at: r.parse_i64(4),
+            updated_at: r.parse_i64(5),
         })
     }
 }
@@ -59,16 +59,16 @@ pub struct Goal {
 impl FromRow for Goal {
     fn from_row(r: &libsql::Row) -> AppResult<Self> {
         Ok(Goal {
-            id: r.get(0)?,
-            role_id: r.get(1).unwrap_or_default(),
-            title: r.get(2).unwrap_or_default(),
-            status: r.get(3).unwrap_or_default(),
-            time_scope: r.get(4).unwrap_or_default(),
-            start_date: r.get(5).ok(),
-            end_date: r.get(6).ok(),
-            sort_order: r.get(7).unwrap_or(0),
-            created_at: r.get(8).unwrap_or(0),
-            updated_at: r.get(9).unwrap_or(0),
+            id: r.parse_str(0),
+            role_id: r.parse_str(1),
+            title: r.parse_str(2),
+            status: r.parse_str(3),
+            time_scope: r.parse_str(4),
+            start_date: r.parse_opt_str(5),
+            end_date: r.parse_opt_str(6),
+            sort_order: r.parse_i32(7),
+            created_at: r.parse_i64(8),
+            updated_at: r.parse_i64(9),
         })
     }
 }
@@ -93,9 +93,9 @@ pub async fn mission_load_all(db: State<'_, TursoDb>) -> AppResult<MissionAllDat
     ).await?;
     let statement = if let Some(r) = stmt_rows.next().await? {
         Some(MissionStatement {
-            id: r.get(0)?,
-            content: r.get(1).unwrap_or_default(),
-            updated_at: r.get(2).unwrap_or(0),
+            id: r.parse_str(0),
+            content: r.parse_str(1),
+            updated_at: r.parse_i64(2),
         })
     } else {
         None

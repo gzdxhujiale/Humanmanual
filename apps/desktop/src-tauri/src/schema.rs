@@ -93,18 +93,39 @@ pub async fn ensure_local_tables(conn: &Connection) -> Result<(), libsql::Error>
         ("mission_goals", "created_at"),
         ("mission_goals", "updated_at"),
         ("mission_statement", "updated_at"),
+        ("time_management_tasks", "created_at"),
+        ("time_management_tasks", "completed_at"),
         ("list_notes", "created_at"),
         ("list_notes", "updated_at"),
     ] {
         let sql = format!(
             "UPDATE {table} SET {col} = CASE \
-                WHEN {col} LIKE '____-__-__%' THEN CAST(strftime('%s', {col}) AS INTEGER) * 1000 + CAST(substr({col}, 21, 3) AS INTEGER) \
-                ELSE CAST({col} AS INTEGER) \
-            END WHERE typeof({col}) = 'text' AND {col} != ''"
+                WHEN {col} LIKE '____-__-__%' THEN CAST(strftime('%s', {col}) AS INTEGER) * 1000 + CAST(COALESCE(NULLIF(substr({col}, 21, 3), ''), '0') AS INTEGER) \
+                WHEN {col} IS NOT NULL AND {col} != '' THEN CAST({col} AS INTEGER) \
+                ELSE NULL \
+            END WHERE typeof({col}) = 'text'"
         );
         if let Err(e) = conn.execute(&sql, ()).await {
             eprintln!("[Schema] ms-migration failed for {table}.{col}: {e}");
         }
+    }
+
+    // 默认值与 NULL 字段数据清洗
+    let cleanups = [
+        "UPDATE mission_roles SET icon = '🎯' WHERE icon IS NULL OR icon = ''",
+        "UPDATE mission_roles SET sort_order = 0 WHERE sort_order IS NULL",
+        "UPDATE mission_goals SET status = 'not_started' WHERE status IS NULL OR status = ''",
+        "UPDATE mission_goals SET time_scope = 'long' WHERE time_scope IS NULL OR time_scope = ''",
+        "UPDATE mission_goals SET sort_order = 0 WHERE sort_order IS NULL",
+        "UPDATE time_management_tasks SET quadrant = 'q1' WHERE quadrant IS NULL OR quadrant = ''",
+        "UPDATE time_management_tasks SET completed = 0 WHERE completed IS NULL",
+        "UPDATE habits SET auto_popup_log = 0 WHERE auto_popup_log IS NULL",
+        "UPDATE habit_checkins SET completed = 0 WHERE completed IS NULL",
+        "UPDATE daily_reviews SET rating = 0 WHERE rating IS NULL",
+    ];
+
+    for cleanup_sql in cleanups {
+        let _ = conn.execute(cleanup_sql, ()).await;
     }
 
     Ok(())

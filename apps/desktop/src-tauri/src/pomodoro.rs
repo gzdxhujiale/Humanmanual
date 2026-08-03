@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::repo::{query_all, FromRow};
+use crate::repo::{query_all, FromRow, RowExt};
 use crate::sync::now_iso;
 use crate::db::TursoDb;
 
@@ -39,21 +39,20 @@ pub struct PomodoroRecord {
 
 impl FromRow for PomodoroRecord {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let linked_target_str: Option<String> = row.get::<String>(10).ok();
-        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(s.as_str()).ok());
+        let linked_target = row.parse_opt_str(10).and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
         Ok(PomodoroRecord {
-            id: row.get(0)?,
-            mode: row.get::<String>(1).unwrap_or_default(),
-            phase: row.get::<String>(2).unwrap_or_default(),
-            start_time: row.get::<String>(3).unwrap_or_default(),
-            end_time: row.get::<String>(4).unwrap_or_default(),
-            duration_minutes: row.get(5).unwrap_or(0),
-            date: row.get::<String>(6).unwrap_or_default(),
-            date_label: row.get::<String>(7).unwrap_or_default(),
-            time_range_label: row.get::<String>(8).unwrap_or_default(),
-            task_id: row.get::<String>(9).ok(),
+            id: row.parse_str(0),
+            mode: row.parse_str(1),
+            phase: row.parse_str(2),
+            start_time: row.parse_str(3),
+            end_time: row.parse_str(4),
+            duration_minutes: row.parse_i64(5),
+            date: row.parse_str(6),
+            date_label: row.parse_str(7),
+            time_range_label: row.parse_str(8),
+            task_id: row.parse_opt_str(9),
             linked_target,
-            created_at: row.get::<String>(11).unwrap_or_default(),
+            created_at: row.parse_str(11),
         })
     }
 }
@@ -78,19 +77,18 @@ pub struct FavoriteFocusTask {
 
 impl FromRow for FavoriteFocusTask {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let linked_target_str: Option<String> = row.get::<String>(6).ok();
-        let linked_target = linked_target_str.and_then(|s| serde_json::from_str::<LinkedTarget>(s.as_str()).ok());
-        let is_archived_val: i32 = row.get(7).unwrap_or(0);
+        let linked_target = row.parse_opt_str(6).and_then(|s| serde_json::from_str::<LinkedTarget>(&s).ok());
+        let icon_val = row.parse_str(2);
         Ok(FavoriteFocusTask {
-            id: row.get(0)?,
-            name: row.get(1).unwrap_or_default(),
-            icon: row.get(2).unwrap_or_else(|_| "\u{1F60A}".to_string()),
-            mode: row.get(3).unwrap_or_default(),
-            duration_minutes: row.get(4).unwrap_or(25),
-            accumulated_minutes: row.get(5).unwrap_or(0),
+            id: row.parse_str(0),
+            name: row.parse_str(1),
+            icon: if icon_val.is_empty() { "😊".to_string() } else { icon_val },
+            mode: row.parse_str(3),
+            duration_minutes: match row.parse_i64(4) { 0 => 25, n => n },
+            accumulated_minutes: row.parse_i64(5),
             linked_target,
-            is_archived: is_archived_val != 0,
-            created_at: row.get(8).unwrap_or_default(),
+            is_archived: row.parse_bool(7),
+            created_at: row.parse_str(8),
         })
     }
 }

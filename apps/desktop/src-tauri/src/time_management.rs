@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::repo::{query_all, with_txn, FromRow};
+use crate::repo::{query_all, with_txn, FromRow, RowExt};
 use crate::sync::now_iso;
 use crate::db::TursoDb;
 
@@ -18,10 +18,10 @@ pub struct Role {
 impl FromRow for Role {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
         Ok(Role {
-            id: row.get(0)?,
-            name: row.get(1).unwrap_or_default(),
+            id: row.parse_str(0),
+            name: row.parse_str(1),
             color: None,
-            created_at: row.get(2).unwrap_or(0),
+            created_at: row.parse_i64(2),
         })
     }
 }
@@ -46,20 +46,19 @@ pub struct Task {
 
 impl FromRow for Task {
     fn from_row(row: &libsql::Row) -> AppResult<Self> {
-        let completed: i32 = row.get(6).unwrap_or(0);
         Ok(Task {
-            id: row.get(0)?,
-            title: row.get(1).unwrap_or_default(),
-            role_id: row.get(2).ok(),
-            quadrant: row.get(3).unwrap_or_default(),
-            scheduled_date: row.get(4).ok(),
-            time_of_day: row.get(5).ok(),
-            completed: completed != 0,
-            created_at: row.get(7).unwrap_or(0),
-            completed_at: row.get(8).ok(),
-            description: row.get(9).ok(),
-            deadline: row.get(10).ok(),
-            reminder: row.get(11).ok(),
+            id: row.parse_str(0),
+            title: row.parse_str(1),
+            role_id: row.parse_opt_str(2),
+            quadrant: row.parse_str(3),
+            scheduled_date: row.parse_opt_str(4),
+            time_of_day: row.parse_opt_str(5),
+            completed: row.parse_bool(6),
+            created_at: row.parse_i64(7),
+            completed_at: row.parse_opt_i64(8),
+            description: row.parse_opt_str(9),
+            deadline: row.parse_opt_i64(10),
+            reminder: row.parse_opt_str(11),
         })
     }
 }
